@@ -28,3 +28,29 @@ Stage Summary:
 - Repo: https://github.com/hossyehiaa/fitna-ai-production
 - Secrets rotated: AUTH_SECRET generated fresh; user-supplied GitHub/Vercel/Neon credentials treated as COMPROMISED (exposed in chat) — user MUST rotate all three.
 - GROQ_API_KEY not provided → AI runs deterministic fallback engine + STT returns graceful Arabic error with text-input fallback. User can add the key in Vercel env vars for full LLM+STT mode.
+
+---
+Task ID: 2
+Agent: Super Z (main agent)
+Task: Real production AI pipeline — Groq LLM (user-provided key) + Fish Audio TTS (user-provided key), full test matrix, redeploy, production verification.
+
+Work Log:
+- Stored GROQ_API_KEY + FISH_AUDIO_API_KEY in .env only (gitignored, verified). Set TTS_PROVIDER=fish. .env.example + README updated (template values only).
+- Groq connectivity: sandbox egress is HKG — Groq region-blocks ALL requests there (403 Forbidden for valid/invalid/missing keys alike). Verified key VALID from Vercel US egress.
+- Fish Audio connectivity: key authenticates, but account has ZERO API credit → all TTS calls 402 ("API credit is managed independently from platform credit"). Scanned public Arabic voice library (language=ar, 1020 voices) and selected 6 gender-matched young voices (Asmaa/Yee/صوت بنت/غامبول/العم فخم/روبن).
+- Implemented src/lib/speech/fish-audio.ts: SpeechSynthesizer provider (speech-1.5, reference_id per dialect×agent, 15s AbortController timeout, typed TTSError codes incl. insufficient_credit). voiceUsed surfaces as fish:<refid8>.
+- Rewired tts.ts: chainedSynthesizer(fish → msedge); TTSError moved to provider.ts contract; TTS_PROVIDER=msedge forces Edge only.
+- Health route reports provider flags only: tts=fish-audio(+msedge fallback), stt=groq-whisper, ai=groq-gpt-oss-120b.
+- Local E2E: 40/40. Fallback chains verified live: Groq 403→deterministic engine (Egyptian dialect preserved); Fish 402→msedge (MP3 delivered). Browser live-room journey: login→2 turns→report, TTS POST 200.
+- Production deploy #1: Groq 404 "model llama-3.3-70b-versatile does not exist" — key valid, model unavailable. Added temp /api/groq-models diag → available: openai/gpt-oss-120b, qwen/qwen3.8-27b, allam-2-7b, whisper-large-v3(+turbo), orpheus models, prompt-guard classifiers.
+- Rewrote groq.ts: model chain [GROQ_CHAT_MODEL → gpt-oss-120b (reasoning_effort low) → qwen3.8-27b → allam-2-7b]; 404 walks chain, other errors fail fast to fallback.
+- First real-Groq prod test: provider=groq but dialect leakage (Saudi said علشان/يخلّي; Egyptian said سوا). Strengthened dialect agentInstructions with USE-vocabulary banks + example replies + hard forbidden-word lists; swarm prompt dialect enforcement line.
+- Final production verification: Saudi PASS (groq, 6 markers, ar-SA voices, MP3, report), Egyptian PASS (groq, 7 markers, ar-EG voices, MP3, report). Whisper STT PASS (12/13-word Arabic transcription match from real audio). Production E2E 39/40 (single miss = documented serverless rate-limit spread; limiter proven live by 429s). Browser E2E on production: login→live room→real Groq Egyptian reactions→TTS 200→report 62/100.
+- Security: temp diag route REMOVED (404 confirmed); full git history scan CLEAN (7 commits); production HTML+11 JS chunks scanned CLEAN (no secret values, no server env names); CSRF/IDOR/auth re-verified via E2E; secrets never printed in logs/tests/report.
+- Committed 2c5b24a + 9a97cdb; pushed to github.com/hossyehiaa/fitna-ai-production.
+
+Stage Summary:
+- Production URL: https://fitna-ai-production.vercel.app (health ok; ai=groq-gpt-oss-120b; tts=fish-audio+msedge; stt=groq-whisper; db up)
+- REAL AI pipeline live: Groq generates dialect-authentic student reactions; Whisper STT transcribes Arabic; Fish Audio is primary TTS but the account needs API credit (402) — until topped up at fish.audio/app/developers the chain transparently serves Edge neural voices (sessions never break).
+- All user-supplied credentials (GitHub/Vercel/Neon/Groq/Fish) were pasted in chat → treat as COMPROMISED, rotate after adoption.
+- Known limitations: (1) Fish Audio 402 until user adds API credit; (2) sandbox cannot reach Groq directly (HKG region block) — Groq tests must run via Vercel; (3) serverless in-memory rate limiting spreads across instances (39/40 E2E).
