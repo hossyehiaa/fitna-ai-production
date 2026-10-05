@@ -1,5 +1,8 @@
 # فِطنة (Fitna AI) — Production
 
+> **النشر الإنتاجي المباشر:** [fitna-ai-production.vercel.app](https://fitna-ai-production.vercel.app)
+> **المستودع:** [github.com/hossyehiaa/fitna-ai-production](https://github.com/hossyehiaa/fitna-ai-production)
+
 > محاكي الفصل الدراسي الذكي: منصة تدريب تربوي صوتية تفاعلية بطلابٍ افتراضيين،
 > بواجهة عربية فصحى كاملة (RTL) ونمطي تحدث صوتيين للوكلاء: **السعودي** و**المصري**.
 
