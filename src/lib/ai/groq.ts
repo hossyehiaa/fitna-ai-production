@@ -17,6 +17,9 @@ import Groq from "groq-sdk";
 
 export const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
+  // Optional endpoint override (ops/proxy/testing — e.g. GROQ_API_BASE for
+  // routing through a reachable region). Undefined => default api.groq.com.
+  ...(process.env.GROQ_API_BASE ? { baseURL: process.env.GROQ_API_BASE } : {}),
   timeout: 20000,
   maxRetries: 1,
 });
