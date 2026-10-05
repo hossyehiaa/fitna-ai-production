@@ -1,0 +1,15 @@
+file anim_01_m.png
+duration 0.5
+file anim_02_a.png
+duration 0.2
+file anim_04_e.png
+duration 0.2
+file anim_03_o.png
+duration 0.2
+file anim_01_m.png
+duration 0.4
+file anim_05_blink.png
+duration 0.14
+file anim_01_m.png
+duration 0.8
+file anim_01_m.png

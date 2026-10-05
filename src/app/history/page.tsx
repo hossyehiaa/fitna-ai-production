@@ -1,122 +1,99 @@
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth/session";
-import { db } from "@/lib/db";
-import { AppHeader } from "@/components/app/AppHeader";
-import { DIALECT_CONFIG, parseDialect } from "@/lib/dialect/config";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { History as HistoryIcon, Trophy } from "lucide-react";
+import { type Language } from "@/lib/i18n";
+import { HistoryClient, type SessionItem } from "./HistoryClient";
 
-export const metadata = { title: "سجل الجلسات" };
-export const dynamic = "force-dynamic";
+const PAGE_SIZE = 10;
 
-const STATUS_LABEL: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
-  completed: { label: "مكتملة", variant: "default" },
-  in_progress: { label: "قيد التنفيذ", variant: "secondary" },
-  abandoned: { label: "متروكة", variant: "destructive" },
-};
+export default async function HistoryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, parseInt(pageParam ?? "1", 10) || 1);
 
-export default async function HistoryPage() {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login?redirect=/history");
+  const cookieStore = await cookies();
+  const lang = (cookieStore.get("language")?.value === "en" ? "en" : "ar") as Language;
+  const isEn = lang === "en";
 
-  const dialect = parseDialect(user.profile?.dialect);
-  const sessions = await db.simSession.findMany({
-    where: { userId: user.id },
-    orderBy: { startedAt: "desc" },
-    take: 50,
-    include: { topic: { select: { titleAr: true } } },
+  const supabase = await createClient();
+  let user: any = null;
+  try {
+    const userRes = await supabase.auth.getUser();
+    user = userRes?.data?.user ?? null;
+  } catch {}
+
+  if (!user) redirect("/login");
+
+  const db = createAdminClient();
+
+  const from = (page - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
+
+  const {
+    data: sessions,
+    count,
+  } = await Promise.race([
+    db
+      .from("sessions")
+      .select(
+        "id, started_at, duration_minutes, overall_score, teacher_talk_ratio, socratic_question_rate, inclusivity_index, classroom_pattern, topic_id",
+        { count: "exact" }
+      )
+      .eq("teacher_id", user.id)
+      .eq("status", "completed")
+      .order("started_at", { ascending: false })
+      .range(from, to),
+    new Promise<{ data: any[]; count: number }>((resolve) =>
+      setTimeout(() => resolve({ data: [], count: 0 }), 10000)
+    ),
+  ]).catch(() => ({ data: [], count: 0 }));
+
+  const topicIds = [...new Set((sessions ?? []).map((s) => s.topic_id).filter(Boolean))] as string[];
+  const { data: topics } = topicIds.length
+    ? await db.from("lesson_topics").select("id, title_ar, title_en").in("id", topicIds)
+    : { data: [] as { id: string; title_ar: string; title_en: string | null }[] };
+
+  const mappedSessions: SessionItem[] = (sessions ?? []).map((s) => {
+    const d = new Date(s.started_at);
+    const dateStr = d.toLocaleDateString(isEn ? "en-US" : "ar-EG", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const timeStr = d.toLocaleTimeString(isEn ? "en-US" : "ar-EG", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const topicObj = topics?.find((t) => t.id === s.topic_id);
+    const topicTitle =
+      (topicObj && (isEn && topicObj.title_en ? topicObj.title_en : topicObj.title_ar)) ||
+      (isEn ? "Classroom Simulation" : "محاكاة تفاعل الفصل");
+    const topicSubtitle = isEn ? "Pedagogical • Interactive Session" : "تربوي • تدريب تفاعلي";
+
+    return {
+      id: s.id,
+      started_at: s.started_at,
+      dateStr,
+      timeStr,
+      topicTitle,
+      topicSubtitle,
+      overall_score: s.overall_score,
+      classroom_pattern: s.classroom_pattern,
+    };
   });
 
-  const scores = sessions
-    .filter((s) => s.overallScore != null)
-    .map((s) => s.overallScore as number);
-  const best = scores.length ? Math.max(...scores) : null;
+  const totalPages = count ? Math.ceil(count / PAGE_SIZE) : 1;
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <AppHeader
-        userName={(user.profile?.fullName || "المستخدم").split(" ")[0]}
-        dialectLabel={DIALECT_CONFIG[dialect].labelAr}
-      />
-      <main className="flex-1 mx-auto w-full max-w-5xl px-4 py-8 space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div>
-            <h1 className="font-heading text-2xl font-extrabold">سجل جلساتك</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              {sessions.length} جلسة — أفضل أداء: {best != null ? `${Math.round(best)}/100` : "—"}
-            </p>
-          </div>
-          <Button asChild>
-            <Link href="/session/setup">جلسة جديدة</Link>
-          </Button>
-        </div>
-
-        {sessions.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="p-12 text-center">
-              <HistoryIcon className="h-10 w-10 mx-auto mb-4 text-muted-foreground/50" aria-hidden="true" />
-              <h2 className="font-heading font-bold text-lg mb-1">لا توجد جلسات بعد</h2>
-              <p className="text-sm text-muted-foreground mb-4">
-                ابدأ أول جلسة تدريب وسيظهر سجلها وتقريرها هنا
-              </p>
-              <Button asChild>
-                <Link href="/session/setup">بدء أول جلسة</Link>
-              </Button>
-            </CardContent>
-          </Card>
-        ) : (
-          <ul className="space-y-3">
-            {sessions.map((s) => {
-              const st = STATUS_LABEL[s.status] || STATUS_LABEL.in_progress;
-              const sDialect = parseDialect(s.dialect);
-              return (
-                <li key={s.id}>
-                  <Link
-                    href={s.status === "completed" ? `/report/${s.id}` : `/session/${s.id}`}
-                    className="flex items-center gap-4 rounded-2xl border bg-card p-4 hover:shadow-md hover:border-primary/40 transition-all"
-                  >
-                    <span
-                      className={
-                        s.overallScore != null
-                          ? "shrink-0 h-12 w-12 rounded-xl bg-primary/10 text-primary grid place-items-center font-heading font-extrabold tabular-nums"
-                          : "shrink-0 h-12 w-12 rounded-xl bg-muted text-muted-foreground grid place-items-center"
-                      }
-                    >
-                      {s.overallScore != null ? (
-                        Math.round(s.overallScore)
-                      ) : (
-                        <Trophy className="h-5 w-5 opacity-50" aria-hidden="true" />
-                      )}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold truncate">
-                        {s.topic?.titleAr || "جلسة تدريب"}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {new Date(s.startedAt).toLocaleString("ar", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
-                        {" · "}
-                        {s.durationMinutes} دقيقة · {DIALECT_CONFIG[sDialect].labelAr}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant={st.variant}>{st.label}</Badge>
-                      <span className="text-xs text-muted-foreground hidden sm:inline">
-                        {s.status === "completed" ? "التقرير ←" : "المتابعة ←"}
-                      </span>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </main>
-    </div>
+    <HistoryClient
+      sessions={mappedSessions}
+      totalCount={count ?? 0}
+      currentPage={page}
+      totalPages={totalPages}
+      lang={lang}
+    />
   );
 }

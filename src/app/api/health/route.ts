@@ -2,31 +2,35 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
-/** GET /api/health — production readiness probe. Reveals NO secrets. */
+// =====================================================================
+// Health check — deployment verification endpoint.
+// Reports service availability FLAGS ONLY (no secrets, no config values).
+// =====================================================================
 export async function GET() {
   let dbOk = false
   try {
-    await db.$queryRaw`SELECT 1`
+    await db.$queryRawUnsafe('SELECT 1')
     dbOk = true
   } catch {
     dbOk = false
   }
 
-  const body = {
-    ok: dbOk,
-    service: 'fitna-ai-production',
-    time: new Date().toISOString(),
-    checks: {
-      database: dbOk ? 'up' : 'down',
-      // Configuration flags only — NO keys, NO endpoints, NO upstream detail.
+  return NextResponse.json(
+    {
+      status: dbOk ? 'ok' : 'degraded',
+      service: 'fitna-ai',
+      db: dbOk ? 'up' : 'down',
+      // Provider flags (public information — never the keys themselves)
+      ai: process.env.GROQ_API_KEY ? 'groq-gpt-oss-120b' : 'deterministic-fallback',
       tts: process.env.FISH_AUDIO_API_KEY
-        ? 'fish-audio (+msedge fallback)'
-        : 'msedge (no key required)',
-      stt: process.env.GROQ_API_KEY ? 'groq-whisper' : 'not_configured',
-      ai: process.env.GROQ_API_KEY ? 'groq-gpt-oss-120b' : 'fallback_engine',
+        ? `fish-audio:${process.env.FISH_AUDIO_MODEL || 's2.1-pro-free'}+msedge`
+        : 'msedge',
+      stt: process.env.GROQ_API_KEY ? 'groq-whisper-large-v3-turbo' : 'unavailable',
+      auth: 'custom-scrypt-session',
+      timestamp: new Date().toISOString(),
     },
-  }
-
-  return NextResponse.json(body, { status: dbOk ? 200 : 503 })
+    { status: dbOk ? 200 : 503 }
+  )
 }

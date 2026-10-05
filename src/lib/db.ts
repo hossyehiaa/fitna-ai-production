@@ -1,15 +1,13 @@
+// Prisma client singleton — the production database connection.
+// DATABASE_URL stays server-side; never imported from client components.
 import { PrismaClient } from '@prisma/client'
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined
-}
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
-// Query logging is disabled in production: query parameters can embed user
-// content, and logs must never contain private conversation data.
 export const db =
   globalForPrisma.prisma ??
   new PrismaClient({
-    log: process.env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
+    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
   })
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db

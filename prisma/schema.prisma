@@ -1,12 +1,17 @@
 // =====================================================================
-// Fitna AI Production — Prisma schema (Neon PostgreSQL)
+// Fitna AI — production database schema.
 //
-// Covers: auth & identity (users, profiles, sessions, reset tokens),
-// agent personality system, simulation conversations + messages,
-// speech settings, reports, badges, audit logs.
+// The table/column names mirror the ORIGINAL Fitna AI Supabase schema
+// (supabase/schema.sql from mariamhisham24/Fitna-ai) EXACTLY, so the
+// original frontend's data-access expectations are preserved 1:1.
 //
-// Migrations: bun run db:migrate  (dev)  |  prisma migrate deploy (prod)
-// The connection string lives ONLY in DATABASE_URL (env var).
+// Production backend additions (invisible to the UI):
+//   * users.password_hash          — scrypt hash (custom auth, no Supabase Auth)
+//   * student_personas.is_active   — soft toggle used by session setup
+//   * student_personas.dialect     — 'egyptian_arabic' | 'saudi_arabic'
+//   * sessions.dialect             — classroom dialect selected at setup
+//   * auth_sessions                — opaque server sessions (HttpOnly cookie)
+//   * password_reset_tokens        — recovery tokens for /auth/confirm flow
 // =====================================================================
 
 generator client {
@@ -18,239 +23,229 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------------------------------------------------------------------
-// Identity & Authentication
-// ---------------------------------------------------------------------
+model Institution {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  users   User[]
+  cohorts Cohort[]
+  lessonTopics LessonTopic[]
+
+  @@map("institutions")
+}
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  /// scrypt password hash (node:crypto). Never store plaintext.
-  passwordHash String
-  /// Authoritative role, validated server-side only: teacher | institution
-  role         String   @default("teacher")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email     String   @unique
+  fullName  String?  @map("full_name")
+  role      String // 'teacher' | 'institution_admin' | 'super_admin'
+  institutionId String? @map("institution_id") @db.Uuid
+  preferredLanguage String @default("ar") @map("preferred_language")
+  preferredTheme    String @default("light") @map("preferred_theme")
+  teachingExperience String? @map("teaching_experience")
+  teachingLevel      String? @map("teaching_level")
+  subject            String?
+  trainingGoals      String[] @default([]) @map("training_goals")
+  // Production auth: scrypt$N$r$p$saltB64$hashB64 (Supabase Auth replacement)
+  passwordHash String? @map("password_hash")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  profile             Profile?
-  speechSettings      SpeechSettings?
-  authSessions        AuthSession[]
-  passwordResetTokens PasswordResetToken[]
-  simSessions         SimSession[]
-  badges              Badge[]
-  auditLogs           AuditLog[]
+  institution       Institution?       @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  sessions          Session[]
+  badges            Badge[]
+  authSessions      AuthSession[]
+  passwordResetToken PasswordResetToken[]
+  lessonTopicsCreated LessonTopic[] @relation("LessonTopicCreator")
+  cohortMemberships  CohortMember[]
 
-  @@index([role])
+  @@index([institutionId])
+  @@map("users")
 }
-
-model Profile {
-  id                 String   @id @default(cuid())
-  userId             String   @unique
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  fullName           String
-  /// Display copy of account type: teacher | institution
-  userType           String   @default("teacher")
-  /// Speech/AI dialect profile: saudi | egyptian — affects AI voice ONLY, never the UI language
-  dialect            String   @default("saudi")
-  institutionName    String?
-  onboardingComplete Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  @@index([dialect])
-}
-
-model AuthSession {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /// SHA-256 hash of the opaque session token. Raw token only lives in the HTTP-only cookie.
-  tokenHash String   @unique
-  expiresAt DateTime
-  lastSeenAt DateTime @default(now())
-  ipHash    String?
-  userAgent String?
-  createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([expiresAt])
-}
-
-model PasswordResetToken {
-  id        String    @id @default(cuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-
-  @@index([userId])
-  @@index([expiresAt])
-}
-
-// ---------------------------------------------------------------------
-// Agent personality system (configurable, dialect-aware student personas)
-// ---------------------------------------------------------------------
-
-model Agent {
-  id           String   @id @default(cuid())
-  /// Stable key: sara | omar | yassin | nour | future agents
-  key          String   @unique
-  name         String
-  description  String
-  /// Free-form personality summary (Arabic, MSA) shown in UI
-  personality  String
-  /// System prompt template. {{DIALECT_BLOCK}} is injected per user dialect at runtime.
-  systemPrompt String
-  gender       String   @default("female")
-  /// 0-100 base attention level
-  baseAttention Int     @default(70)
-  /// 0-100 comprehension level
-  comprehension Int     @default(70)
-  strengths    String[] @default([])
-  weaknesses   String[] @default([])
-  enabled      Boolean  @default(true)
-  sortOrder    Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-}
-
-// ---------------------------------------------------------------------
-// Simulation conversations (a live classroom session = a conversation)
-// ---------------------------------------------------------------------
 
 model LessonTopic {
-  id        String   @id @default(cuid())
-  titleAr   String
-  titleEn   String?
-  isGlobal  Boolean  @default(true)
-  createdBy String?
-  createdAt DateTime @default(now())
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  titleAr       String   @map("title_ar")
+  titleEn       String?  @map("title_en")
+  institutionId String?  @map("institution_id") @db.Uuid
+  createdBy     String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  sessions SimSession[]
+  institution Institution? @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  creator     User?        @relation("LessonTopicCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  sessions    Session[]
+
+  @@map("lesson_topics")
 }
 
-model SimSession {
-  id               String    @id @default(cuid())
-  userId           String
-  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /// Dialect captured from the user profile at session start (saudi | egyptian)
-  dialect          String
-  topicId          String?
-  topic            LessonTopic? @relation(fields: [topicId], references: [id], onDelete: SetNull)
-  lessonContext    String?
-  durationMinutes  Int       @default(15)
-  /// balanced | disruptive | disengaged
-  classroomStyle   String    @default("balanced")
-  /// socratic_focus | talk_time_reduction | inclusive_engagement | behavior_redirection
-  trainingObjective String   @default("socratic_focus")
-  /// in_progress | completed | abandoned
-  status           String    @default("in_progress")
-  startedAt        DateTime  @default(now())
-  endedAt          DateTime?
+model StudentPersona {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  age               Int
+  dialect           String   @default("egyptian_arabic")
+  personalityPrompt String   @map("personality_prompt")
+  baseAttention     Int      @default(70) @map("base_attention")
+  strengths         String[] @default([])
+  weaknesses        String[] @default([])
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  // Pedagogical telemetry
-  overallScore      Float?
-  teacherTalkRatio  Float?
-  socraticRate      Float?
-  inclusivityIndex  Float?
-  classroomPattern  String?
+  sessionStudents SessionStudent[]
 
-  events  SessionEvent[]
-  report  Report?
-
-  @@index([userId, startedAt])
-  @@index([status])
+  @@map("student_personas")
 }
 
-/// One message/turn inside a conversation (teacher utterance, student reaction, system event)
+model Session {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  teacherId            String   @map("teacher_id") @db.Uuid
+  institutionId        String?  @map("institution_id") @db.Uuid
+  topicId              String?  @map("topic_id") @db.Uuid
+  lessonContext        String?  @map("lesson_context")
+  durationMinutes      Int      @default(15) @map("duration_minutes")
+  classroomStyle       String?  @map("classroom_style")
+  trainingObjective    String?  @map("training_objective")
+  status               String   @default("in_progress")
+  startedAt            DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt              DateTime? @map("ended_at") @db.Timestamptz(3)
+  overallScore         Decimal? @map("overall_score") @db.Decimal(5, 2)
+  teacherTalkRatio     Decimal? @map("teacher_talk_ratio") @db.Decimal(5, 2)
+  socraticQuestionRate Decimal? @map("socratic_question_rate") @db.Decimal(5, 2)
+  inclusivityIndex     Decimal? @map("inclusivity_index") @db.Decimal(5, 2)
+  classroomPattern     String?  @map("classroom_pattern")
+  dialect              String   @default("egyptian_arabic")
+
+  teacher         User            @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  topic           LessonTopic?    @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  sessionStudents SessionStudent[]
+  sessionEvents   SessionEvent[]
+  report          Report?
+  badges          Badge[]
+
+  @@index([teacherId])
+  @@index([institutionId])
+  @@map("sessions")
+}
+
+model SessionStudent {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId      String  @map("session_id") @db.Uuid
+  personaId      String  @map("persona_id") @db.Uuid
+  finalAttention Int?    @map("final_attention")
+  timesSpoken    Int     @default(0) @map("times_spoken")
+
+  session Session        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  persona StudentPersona @relation(fields: [personaId], references: [id], onDelete: Restrict)
+
+  @@map("session_students")
+}
+
 model SessionEvent {
-  id         String   @id @default(cuid())
-  sessionId  String
-  session    SimSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  /// teacher_utterance | student_reaction | system
-  eventType  String
-  /// teacher | agent key (sara, omar, ...) | system
-  actor      String
-  content    String
-  audioUrl   String?
-  /// Speaking style, attention state, latency etc. — never secrets.
-  metadata   Json?
-  occurredMs Int      @default(0)
-  createdAt  DateTime @default(now())
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId    String   @map("session_id") @db.Uuid
+  eventType    String   @map("event_type")
+  actor        String
+  content      String
+  audioUrl     String?  @map("audio_url")
+  metadata     Json?
+  occurredAtMs Int      @map("occurred_at_ms")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  @@index([sessionId, occurredMs])
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, occurredAtMs])
+  @@map("session_events")
 }
 
 model Report {
-  id              String   @id @default(cuid())
-  sessionId       String   @unique
-  session         SimSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  summaryAr       String
-  sessionSignalAr String
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId       String   @unique @map("session_id") @db.Uuid
+  summaryAr       String   @map("summary_ar")
+  sessionSignalAr String   @map("session_signal_ar")
   strengths       String[] @default([])
   weaknesses      String[] @default([])
   recommendations String[] @default([])
-  evidenceMoments Json?
-  frameworkScores Json?
-  /// Public share token for read-only report links
-  shareToken      String   @unique @default(cuid())
-  createdAt       DateTime @default(now())
+  evidenceMoments Json     @default("[]") @map("evidence_moments")
+  frameworkScores Json?    @map("framework_scores")
+  shareToken      String   @default(dbgenerated("gen_random_uuid()")) @map("share_token") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
 }
 
 model Badge {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  badgeKey   String
-  unlockedAt DateTime @default(now())
-  sessionId  String?
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  badgeKey   String   @map("badge_key")
+  unlockedAt DateTime @default(now()) @map("unlocked_at") @db.Timestamptz(3)
+  sessionId  String?  @map("session_id") @db.Uuid
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@unique([userId, badgeKey])
+  @@map("badges")
+}
+
+model Cohort {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  institutionId  String   @map("institution_id") @db.Uuid
+  name           String
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  institution Institution    @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  members     CohortMember[]
+
+  @@index([institutionId])
+  @@map("cohorts")
+}
+
+model CohortMember {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cohortId  String   @map("cohort_id") @db.Uuid
+  teacherId String   @map("teacher_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  cohort  Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  teacher User   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@unique([cohortId, teacherId])
+  @@index([cohortId])
+  @@map("cohort_members")
+}
+
+// ---------------------------------------------------------------------
+// Production auth tables (replaces Supabase Auth / auth.users)
+// ---------------------------------------------------------------------
+
+model AuthSession {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  tokenHash  String   @unique @map("token_hash")
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(3)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  ipHash     String?  @map("ip_hash")
+  userAgent  String?  @map("user_agent") @db.VarChar(200)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
+  @@map("auth_sessions")
 }
 
-// ---------------------------------------------------------------------
-// Speech settings (per user)
-// ---------------------------------------------------------------------
+model PasswordResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-model SpeechSettings {
-  id             String   @id @default(cuid())
-  userId         String   @unique
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  ttsProvider    String   @default("msedge")
-  /// Optional voice override; empty = dialect default
-  ttsVoice       String?
-  ttsRate        String   @default("+0%")
-  ttsPitch       String   @default("+0Hz")
-  sttProvider    String   @default("groq")
-  language       String   @default("ar")
-  /// ar-SA | ar-EG (derived from dialect, kept for observability)
-  locale         String   @default("ar-SA")
-  /// 0.5 - 1.5
-  speakingRate   Float    @default(1.0)
-  /// relaxed | balanced | expressive
-  expressiveness String   @default("balanced")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-}
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-// ---------------------------------------------------------------------
-// Audit logging (security-relevant events only, no secrets, no content)
-// ---------------------------------------------------------------------
-
-model AuditLog {
-  id        String   @id @default(cuid())
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  /// signup | login | login_failed | logout | password_change | password_reset |
-  /// account_deleted | dialect_changed | session_created | session_completed | rate_limited ...
-  action    String
-  metadata  Json?
-  ipHash    String?
-  createdAt DateTime @default(now())
-
-  @@index([userId, createdAt])
-  @@index([action, createdAt])
+  @@index([userId])
+  @@map("password_reset_tokens")
 }

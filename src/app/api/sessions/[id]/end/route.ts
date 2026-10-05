@@ -1,133 +1,211 @@
-import { NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { getCurrentUser } from '@/lib/auth/session'
-import { verifyOrigin } from '@/lib/security/csrf'
-import { endSessionSchema, safeJson } from '@/lib/security/validation'
-import { audit } from '@/lib/security/audit'
-import { generateReport, computeMetrics } from '@/lib/ai/turn'
+import { NextRequest, NextResponse } from "next/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import {
+  computeTeacherTalkRatio,
+  computeSocraticQuestionRate,
+  computeInclusivityIndex,
+  computeOverallScore,
+  computeClassroomPattern,
+} from "@/lib/metrics/compute";
+import { generateSessionReport } from "@/lib/ai/report";
 
-export const runtime = 'nodejs'
+export const runtime = "nodejs";
 
-/** POST /api/sessions/[id]/end — finish the session, compute metrics, generate report + badges. */
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const csrf = verifyOrigin(req)
-  if (csrf) return csrf
+/**
+ * "End Simulation" (spec Stage 6 close-out): marks the session
+ * completed and computes every headline metric for real, from the
+ * events actually logged during the session — the same computation
+ * used for the live HUD, just run one final time on the full transcript.
+ */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    return await handleEnd(request, params);
+  } catch (err) {
+    console.error("Ending session failed:", err);
+    return NextResponse.json({ error: "حصل خطأ أثناء إنهاء الجلسة. جرب تاني." }, { status: 500 });
+  }
+}
 
-  const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ error: 'يجب تسجيل الدخول للوصول إلى هذه الخدمة' }, { status: 401 })
+async function handleEnd(request: NextRequest, params: Promise<{ id: string }>) {
+  const { id: sessionId } = await params;
+
+  let bodyJson: { liveTeacherTalkRatio?: number } | null = null;
+  try {
+    bodyJson = await request.json();
+  } catch {}
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
+
+  const { data: session } = await supabase
+    .from("sessions")
+    .select("id, teacher_id, status, started_at, duration_minutes, lesson_context")
+    .eq("id", sessionId)
+    .single();
+
+  if (!session || session.teacher_id !== user.id) {
+    return NextResponse.json({ error: "الجلسة دي مش بتاعتك" }, { status: 403 });
+  }
+  if (session.status !== "in_progress") {
+    return NextResponse.json({ error: "الجلسة دي مخلّصة بالفعل" }, { status: 400 });
   }
 
-  const { id: sessionId } = await params
-  if (!sessionId || sessionId.length > 60) {
-    return NextResponse.json({ error: 'معرّف غير صالح' }, { status: 400 })
-  }
+  const { data: events } = await supabase
+    .from("session_events")
+    .select("*")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true });
 
-  const parsed = await safeJson(req, endSessionSchema)
-  if ('error' in parsed) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 })
-  }
-  const { reason } = parsed.data
+  const { count: studentCount } = await supabase
+    .from("session_students")
+    .select("id", { count: "exact", head: true })
+    .eq("session_id", sessionId);
 
-  // IDOR: ownership enforced in the query.
-  const session = await db.simSession.findFirst({
-    where: { id: sessionId, userId: user.id },
-    select: { id: true, status: true },
-  })
-  if (!session) {
-    return NextResponse.json({ error: 'الجلسة غير موجودة' }, { status: 404 })
-  }
-  if (session.status !== 'in_progress') {
-    // Idempotent: ending an ended session returns its existing report.
-    const existing = await db.report.findUnique({ where: { sessionId } })
-    return NextResponse.json({ ok: true, reportId: existing?.id ?? null, alreadyEnded: true })
-  }
+  const allEvents = events ?? [];
+  const totalElapsedMs = allEvents.length
+    ? Math.max(...allEvents.map((e) => e.occurred_at_ms))
+    : session.duration_minutes * 60 * 1000;
 
-  const metrics = await computeMetrics(sessionId)
-  const reportData = reason === 'completed' ? await generateReport(sessionId) : null
+  const computedRatio = computeTeacherTalkRatio(allEvents, totalElapsedMs);
+  const teacherTalkRatio =
+    typeof bodyJson?.liveTeacherTalkRatio === "number" && bodyJson.liveTeacherTalkRatio > 0
+      ? bodyJson.liveTeacherTalkRatio
+      : computedRatio;
+  const socraticQuestionRate = computeSocraticQuestionRate(allEvents);
+  const inclusivityIndex = computeInclusivityIndex(allEvents, studentCount ?? 0);
+  const overallScore = computeOverallScore({
+    teacherTalkRatio,
+    socraticQuestionRate,
+    inclusivityIndex,
+  });
+  const classroomPattern = computeClassroomPattern(allEvents, inclusivityIndex);
 
-  await db.simSession.update({
-    where: { id: sessionId },
-    data: {
-      status: reason,
-      endedAt: new Date(),
-      teacherTalkRatio: metrics.teacherTalkRatio,
-      socraticRate: metrics.socraticRate,
-      inclusivityIndex: metrics.inclusivityIndex,
-      ...(reportData
-        ? {
-            overallScore: reportData.overallScore,
-            classroomPattern: reportData.classroomPattern,
-          }
-        : {}),
-    },
-  })
-
-  // Upsert the report separately (clean, avoids nested-write pitfalls).
-  if (reportData) {
-    await db.report.upsert({
-      where: { sessionId },
-      create: {
-        sessionId,
-        summaryAr: reportData.summaryAr,
-        sessionSignalAr: reportData.sessionSignalAr,
-        strengths: reportData.strengths,
-        weaknesses: reportData.weaknesses,
-        recommendations: reportData.recommendations,
-        frameworkScores: {
-          engagement: Math.min(100, Math.round(metrics.inclusivityIndex)),
-          socratic: Math.min(100, Math.round(metrics.socraticRate * 1.2)),
-          control: Math.max(0, Math.round(100 - Math.abs(metrics.teacherTalkRatio - 40) * 1.5)),
-          inclusivity: metrics.inclusivityIndex,
-        },
-      },
-      update: {
-        summaryAr: reportData.summaryAr,
-        sessionSignalAr: reportData.sessionSignalAr,
-        strengths: reportData.strengths,
-        weaknesses: reportData.weaknesses,
-        recommendations: reportData.recommendations,
-      },
+  const { error: updateError } = await supabase
+    .from("sessions")
+    .update({
+      status: "completed",
+      ended_at: new Date().toISOString(),
+      overall_score: overallScore,
+      teacher_talk_ratio: teacherTalkRatio,
+      socratic_question_rate: socraticQuestionRate,
+      inclusivity_index: inclusivityIndex,
+      classroom_pattern: classroomPattern,
     })
+    .eq("id", sessionId);
+
+  if (updateError) {
+    console.error("Failed to finalize session:", updateError);
+    return NextResponse.json({ error: "حصل خطأ أثناء إنهاء الجلسة" }, { status: 500 });
   }
 
-  const reportRow = await db.report.findUnique({ where: { sessionId }, select: { id: true } })
+  // Badge unlock checks (spec Stage 3 / FR-46): real code-defined conditions
+  // evaluated against this session's real metrics and history.
+  const badgesToAward: string[] = [];
 
-  // Badge engine (deterministic DB-level criteria).
-  const completedCount = await db.simSession.count({
-    where: { userId: user.id, status: 'completed' },
-  })
-  const badgesToAward: string[] = []
-  if (completedCount >= 1) badgesToAward.push('pioneer_teacher')
-  if (completedCount >= 5) badgesToAward.push('streak_master')
-  if (reportData && reportData.overallScore >= 85) badgesToAward.push('classroom_captain')
-  if (metrics.socraticRate >= 50 && metrics.totalTurns >= 5) badgesToAward.push('socrates_incarnate')
-  if (metrics.inclusivityIndex >= 85 && metrics.totalTurns >= 5) badgesToAward.push('inclusive_educator')
-  if (metrics.teacherTalkRatio >= 30 && metrics.teacherTalkRatio <= 45 && metrics.totalTurns >= 5) {
-    badgesToAward.push('master_listener')
-  }
-  for (const key of badgesToAward) {
-    await db.badge.upsert({
-      where: { userId_badgeKey: { userId: user.id, badgeKey: key } },
-      update: {},
-      create: { userId: user.id, badgeKey: key, sessionId },
-    })
+  // 1. Socrates Incarnate: Socratic rate > 80%
+  if (socraticQuestionRate > 80) {
+    badgesToAward.push("socrates_incarnate");
   }
 
-  await audit('session_completed', {
-    userId: user.id,
-    metadata: {
-      sessionId,
-      reason,
-      score: reportData?.overallScore ?? null,
-      badges: badgesToAward,
-    },
-  })
+  // 2. Master Listener: Teacher talk ratio between 25% and 50%
+  if (teacherTalkRatio >= 25 && teacherTalkRatio <= 50) {
+    badgesToAward.push("master_listener");
+  }
+
+  // 3. Inclusive Educator: 100% inclusivity
+  if (inclusivityIndex === 100) {
+    badgesToAward.push("inclusive_educator");
+  }
+
+  // 4. Classroom Captain: Overall score >= 90
+  if (overallScore >= 90) {
+    badgesToAward.push("classroom_captain");
+  }
+
+  // Check total completed sessions for milestone badges
+  const { count: totalCompletedSessions } = await supabase
+    .from("sessions")
+    .select("id", { count: "exact", head: true })
+    .eq("teacher_id", user.id)
+    .eq("status", "completed");
+
+  const completedCount = totalCompletedSessions ?? 1;
+
+  // 5. Pioneer Teacher: Completed at least 1 session
+  if (completedCount >= 1) {
+    badgesToAward.push("pioneer_teacher");
+  }
+
+  // 6. Streak Master: Completed 3 or more sessions
+  if (completedCount >= 3) {
+    badgesToAward.push("streak_master");
+  }
+
+  const adminClient = createAdminClient();
+  for (const badgeKey of badgesToAward) {
+    await adminClient
+      .from("badges")
+      .upsert(
+        { user_id: user.id, badge_key: badgeKey, session_id: sessionId },
+        { onConflict: "user_id,badge_key", ignoreDuplicates: true }
+      );
+  }
+
+  // Real LLM report generation (spec Stage 7): reads the actual
+  // transcript once, here, right when the session truly ends — a
+  // single source of truth instead of regenerating on every report
+  // page view (which would also make repeated visits non-deterministic
+  // and burn Groq quota for no reason).
+  const { data: personaRows } = await supabase.from("student_personas").select("id, name");
+  const personaNameById = new Map((personaRows ?? []).map((p) => [p.id, p.name]));
+
+  try {
+    const report = await generateSessionReport({
+      events: allEvents,
+      personaNameById,
+      metrics: { overallScore, teacherTalkRatio, socraticQuestionRate, inclusivityIndex, classroomPattern },
+      lessonContext: session.lesson_context,
+    });
+
+    // Save report using existing adminClient
+    const basePayload = {
+      session_id: sessionId,
+      summary_ar: report.summaryAr,
+      session_signal_ar: report.sessionSignalAr,
+      strengths: report.strengths,
+      weaknesses: report.weaknesses,
+      recommendations: report.recommendations,
+      evidence_moments: report.evidenceMoments.map((m) => ({
+        label: m.label,
+        timestamp_ms: m.timestampMs,
+        event_id: m.eventId,
+      })),
+    };
+
+    const { error: reportError } = await adminClient.from("reports").insert({
+      ...basePayload,
+      framework_scores: report.frameworkScores,
+    });
+
+    if (reportError) {
+      console.warn("Retrying report insert without framework_scores (migration fallback):", reportError);
+      const { error: fallbackError } = await adminClient.from("reports").insert(basePayload);
+      if (fallbackError) {
+        console.error("Failed to save generated report completely:", fallbackError);
+      }
+    }
+  } catch (err) {
+    console.error("Report generation failed:", err);
+  }
 
   return NextResponse.json({
-    ok: true,
-    reportId: reportRow?.id ?? null,
-    badges: badgesToAward,
-    score: reportData?.overallScore ?? null,
-  })
+    overallScore,
+    teacherTalkRatio,
+    socraticQuestionRate,
+    inclusivityIndex,
+    classroomPattern,
+  });
 }

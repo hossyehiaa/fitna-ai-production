@@ -1,0 +1,9 @@
+TTS @ git+https://github.com/coqui-ai/TTS@v0.21.1
+transformers
+triton
+torch
+torchaudio
+spaces
+gradio>=5.0.0
+scipy
+numpy

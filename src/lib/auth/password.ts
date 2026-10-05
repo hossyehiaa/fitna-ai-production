@@ -1,6 +1,7 @@
 // =====================================================================
 // Password hashing — node:crypto scrypt (memory-hard, OWASP-approved).
 // Format: scrypt$N$r$p$saltB64$hashB64 — self-describing for future upgrades.
+// Replaces Supabase Auth's bcrypt-backed credential store.
 // =====================================================================
 
 import { randomBytes, scrypt as _scrypt, timingSafeEqual } from 'node:crypto'
@@ -39,13 +40,4 @@ export async function verifyPassword(password: string, stored: string): Promise<
   } catch {
     return false
   }
-}
-
-/** Password policy (validated identically on client and server). */
-export function validatePasswordStrength(password: string): string | null {
-  if (password.length < 8) return 'يجب أن تتكون كلمة المرور من 8 أحرف على الأقل'
-  if (password.length > 128) return 'كلمة المرور طويلة بشكل مبالغ فيه'
-  if (!/[A-Za-z\u0600-\u06FF]/.test(password)) return 'يجب أن تحتوي كلمة المرور على حرف واحد على الأقل'
-  if (!/[0-9]/.test(password)) return 'يجب أن تحتوي كلمة المرور على رقم واحد على الأقل'
-  return null
 }

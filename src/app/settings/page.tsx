@@ -1,39 +1,38 @@
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/session";
-import { AppHeader } from "@/components/app/AppHeader";
-import { DIALECT_CONFIG, parseDialect } from "@/lib/dialect/config";
-import { SettingsTabs } from "./SettingsTabs";
-
-export const metadata = { title: "الإعدادات" };
-export const dynamic = "force-dynamic";
+import { AppHeader } from "@/components/AppHeader";
+import { SettingsForm } from "./SettingsForm";
+import { getDictionary, type Language } from "@/lib/i18n";
 
 export default async function SettingsPage() {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login?redirect=/settings");
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
 
-  const dialect = parseDialect(user.profile?.dialect);
+  const cookieStore = await cookies();
+  const lang = (cookieStore.get("language")?.value === "en" ? "en" : "ar") as Language;
+  const t = getDictionary(lang);
+
+  const db = createAdminClient();
+  const { data: profile } = await db
+    .from("users")
+    .select(
+      "full_name, email, teaching_experience, teaching_level, subject, preferred_theme, preferred_language, role"
+    )
+    .eq("id", user.id)
+    .single();
+
+  if (!profile) redirect("/login");
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <AppHeader
-        userName={(user.profile?.fullName || "المستخدم").split(" ")[0]}
-        dialectLabel={DIALECT_CONFIG[dialect].labelAr}
-      />
-      <main className="flex-1 mx-auto w-full max-w-3xl px-4 py-8">
-        <h1 className="font-heading text-2xl font-extrabold mb-1">الإعدادات</h1>
-        <p className="text-sm text-muted-foreground mb-6">
-          إدارة ملفك الشخصي، تفضيلات الصوت واللهجة، والأمان والخصوصية
-        </p>
-        <SettingsTabs
-          initial={{
-            fullName: user.profile?.fullName || "",
-            userType: user.role === "institution" ? "institution" : "teacher",
-            institutionName: user.profile?.institutionName || "",
-            email: user.email,
-            dialect,
-          }}
-        />
-      </main>
+    <div className="min-h-screen bg-[#F5F1E8] dark:bg-[#071B3A]">
+      <AppHeader title={t.settings.pageTitle} />
+      <div className="max-w-2xl mx-auto p-6 md:p-8">
+        <SettingsForm profile={profile} />
+      </div>
     </div>
   );
 }

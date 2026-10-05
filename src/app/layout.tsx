@@ -1,65 +1,34 @@
-import type { Metadata, Viewport } from "next";
-import { Toaster } from "@/components/ui/toaster";
-import "./globals.css";
+import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
+import { I18nProvider } from '@/lib/i18n/context';
+import type { Language } from '@/lib/i18n/types';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: {
-    default: "فِطنة | محاكي الفصل الذكي",
-    template: "%s | فِطنة",
-  },
-  description:
-    "منصة فِطنة للتدريب التربوي: تدرّب على إدارة الفصل عبر محاكاة صوتية تفاعلية بطلابٍ افتراضيين، واختر نمط التحدث السعودي أو المصري لوكلاء الذكاء الاصطناعي.",
-  keywords: ["فتنة", "تدريب المعلمين", "محاكاة الفصل", "الذكاء الاصطناعي", "تعليم"],
-  openGraph: {
-    title: "فِطنة | محاكي الفصل الذكي",
-    description: "محاكاة صوتية تفاعلية لتدريب المعلمين بالذكاء الاصطناعي",
-    type: "website",
+  title: 'Fitna AI | محاكاة',
+  description: 'اتقن إدارة الفصل قبل أن تدخله - AI-Powered Classroom Simulation',
+  icons: {
+    icon: [
+      { url: '/favicon.ico' },
+      { url: '/logo/fitna-icon.png', type: 'image/png' },
+    ],
+    shortcut: '/favicon.ico',
+    apple: '/logo/fitna-icon.png',
   },
 };
 
-export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#faf9f5" },
-    { media: "(prefers-color-scheme: dark)", color: "#1a2121" },
-  ],
-  width: "device-width",
-  initialScale: 1,
-};
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const cookieStore = await cookies();
+  const theme = cookieStore.get('theme')?.value === 'dark' ? 'dark' : 'light';
+  const lang = (cookieStore.get('language')?.value === 'en' ? 'en' : 'ar') as Language;
+  const dir = lang === 'en' ? 'ltr' : 'rtl';
 
-// Applied before paint to avoid theme flash; falls back to system preference.
-const themeInitScript = `
-try {
-  var t = localStorage.getItem('fitna-theme');
-  if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    document.documentElement.classList.add('dark');
-  }
-} catch (e) {}
-`;
-
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ar" dir="rtl" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700&display=swap"
-          rel="stylesheet"
-        />
-        <style>{`
-          :root {
-            --font-app-sans: 'Tajawal', 'Segoe UI', system-ui, sans-serif;
-            --font-heading: 'Cairo', 'Tajawal', sans-serif;
-            --font-app-mono: ui-monospace, monospace;
-          }
-        `}</style>
-      </head>
-      <body className="antialiased bg-background text-foreground min-h-screen flex flex-col">
-        {children}
-        <Toaster />
+    <html lang={lang} dir={dir} className={theme === 'dark' ? 'dark' : ''}>
+      <body>
+        <I18nProvider initialLang={lang}>
+          {children}
+        </I18nProvider>
       </body>
     </html>
   );
