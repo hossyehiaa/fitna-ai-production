@@ -102,13 +102,14 @@ bun run dev                       # http://localhost:3000
 ```
 
 Without `GROQ_API_KEY` the app is fully functional (deterministic engine + text input).
+Without Fish Audio credit the TTS chain transparently serves Edge neural voices.
 
 ## النشر إلى الإنتاج | Production deployment (Vercel + Neon)
 
 1. Import the repo into Vercel (framework preset: Next.js).
 2. Set environment variables (Production):
    `DATABASE_URL`, `AUTH_SECRET`, `NEXT_PUBLIC_APP_URL`,
-   optionally `GROQ_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`.
+   optionally `GROQ_API_KEY`, `FISH_AUDIO_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`.
 3. Apply migrations once: `DATABASE_URL=... bunx prisma migrate deploy`.
 4. Visit `/api/health` — expect `{"ok":true, checks:{database:"up", ...}}`.
 
@@ -122,8 +123,9 @@ See [.env.example](./.env.example). Summary:
 | `AUTH_SECRET` | ✅ | Session token HMAC pepper (`openssl rand -hex 32`) |
 | `NEXT_PUBLIC_APP_URL` | ✅ (prod) | Canonical origin (email links, CSRF) |
 | `GROQ_API_KEY` | ➖ | AI reactions + Whisper STT (fallback engine without it) |
+| `FISH_AUDIO_API_KEY` | ➖ | Fish Audio premium TTS — primary when set; falls back to Edge voices |
 | `RESEND_API_KEY` / `EMAIL_FROM` | ➖ | Password-reset emails |
-| `TTS_PROVIDER` / `STT_PROVIDER` | ➖ | Provider selection (default: msedge / groq) |
+| `TTS_PROVIDER` / `STT_PROVIDER` | ➖ | Provider override (chain: fish-audio → msedge; STT: groq) |
 
 ## الاختبارات | Verification performed
 

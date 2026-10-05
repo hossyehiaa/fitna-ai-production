@@ -1,16 +1,23 @@
 // =====================================================================
-// TTS engine — Microsoft Edge neural voices via msedge-tts.
+// TTS engine + provider chain.
 //
-// Why: free (no API key), reliable, server-side SDK, and it natively ships
-// BOTH ar-SA (Saudi) and ar-EG (Egyptian) neural voices — exactly matching
-// the two dialect profiles. Failures degrade gracefully: the route returns
-// a clean Arabic error and the UI falls back to text-only display.
+// Chain (getSynthesizer):
+//   FISH_AUDIO_API_KEY present  ->  fish-audio  ->  msedge fallback
+//   no Fish key / explicit TTS_PROVIDER="msedge"  ->  msedge only
+//
+// Why this shape: a premium provider outage, an empty API-credit balance,
+// or a network blip can never kill a live classroom session — the Edge
+// neural voices (free, both ar-SA and ar-EG) always catch the fall.
+// Failures are logged as structured, secret-free events for ops.
 // =====================================================================
 
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
 import type { SynthesisRequest, SynthesisResult, SpeechSynthesizer } from './provider'
-import { resolveVoiceProfile } from './provider'
+import { TTSError, resolveVoiceProfile } from './provider'
+import { fishAudioSynthesizer, isFishConfigured } from './fish-audio'
 import { parseDialect } from '@/lib/dialect/config'
+
+export { TTSError }
 
 const EDGE_TIMEOUT_MS = 12_000
 
@@ -43,13 +50,6 @@ function synthesizeEdge(req: SynthesisRequest): Promise<SynthesisResult> {
   ])
 }
 
-/** Secondary safety net: any provider failure surfaces as a typed error. */
-export class TTSError extends Error {
-  constructor(public code: 'provider_unavailable' | 'tts_timeout' | 'empty_audio' | 'bad_input') {
-    super(code)
-  }
-}
-
 export const edgeSynthesizer: SpeechSynthesizer = {
   name: 'msedge',
   async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
@@ -64,8 +64,40 @@ export const edgeSynthesizer: SpeechSynthesizer = {
   },
 }
 
-/** The active synthesizer (single registration point for future providers). */
+/** Wrap primary + fallback: a primary failure degrades instead of throwing. */
+function chainedSynthesizer(primary: SpeechSynthesizer, fallback: SpeechSynthesizer): SpeechSynthesizer {
+  return {
+    name: `${primary.name}+${fallback.name}`,
+    async synthesize(req: SynthesisRequest): Promise<SynthesisResult> {
+      try {
+        return await primary.synthesize(req)
+      } catch (err) {
+        // Structured ops log — no secrets, no user text.
+        console.error(
+          JSON.stringify({
+            level: 'warn',
+            category: 'tts_provider_failed',
+            provider: primary.name,
+            code: err instanceof TTSError ? err.code : 'unknown',
+            fallback: fallback.name,
+          })
+        )
+        return fallback.synthesize(req)
+      }
+    },
+  }
+}
+
+/**
+ * The active synthesizer — single registration point for providers.
+ * TTS_PROVIDER="msedge" forces the free Edge voices even when Fish Audio
+ * is configured (explicit ops override).
+ */
 export function getSynthesizer(): SpeechSynthesizer {
-  // Future: switch on process.env.TTS_PROVIDER to select ElevenLabs etc.
+  const explicit = (process.env.TTS_PROVIDER || '').trim().toLowerCase()
+  if (explicit === 'msedge') return edgeSynthesizer
+  if (isFishConfigured()) {
+    return chainedSynthesizer(fishAudioSynthesizer, edgeSynthesizer)
+  }
   return edgeSynthesizer
 }

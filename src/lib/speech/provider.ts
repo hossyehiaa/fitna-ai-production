@@ -5,10 +5,14 @@
 // The frontend NEVER talks to a TTS/STT provider directly — every call
 // goes through the secure backend API (secrets stay server-side).
 //
-// Current provider: Microsoft Edge neural TTS (free, no API key, has both
-//   ar-SA and ar-EG neural voices) — ideal zero-cost production default.
-// Adding a provider (ElevenLabs, Google, Fish Audio...) = implement
-//   SpeechSynthesizer and register it below. No route changes needed.
+// Current providers:
+//   * Fish Audio (premium neural TTS, needs FISH_AUDIO_API_KEY) — primary
+//     when the key is configured.
+//   * Microsoft Edge neural TTS (free, no API key, ar-SA + ar-EG voices) —
+//     built-in fallback and zero-cost default.
+// The chain lives in tts.ts: fish-audio -> msedge. Adding another provider
+// (ElevenLabs, Google...) = implement SpeechSynthesizer and register it in
+// getSynthesizer(). No route changes needed.
 // =====================================================================
 
 import { getSpeechConfig, parseDialect, DIALECT_CONFIG, type Dialect } from '@/lib/dialect/config'
@@ -32,6 +36,16 @@ export interface SynthesisResult {
 export interface SpeechSynthesizer {
   readonly name: string
   synthesize(req: SynthesisRequest): Promise<SynthesisResult>
+}
+
+/** Typed synthesis failure — providers throw this; routes map it to a clean
+ *  Arabic message. Provider internals (keys, upstream errors) NEVER surface. */
+export class TTSError extends Error {
+  constructor(
+    public code: 'provider_unavailable' | 'insufficient_credit' | 'tts_timeout' | 'empty_audio' | 'bad_input'
+  ) {
+    super(code)
+  }
 }
 
 // ---------------------------------------------------------------------

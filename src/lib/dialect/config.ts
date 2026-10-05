@@ -79,11 +79,17 @@ export const DIALECT_CONFIG: Record<Dialect, DialectSpeechConfig> = {
 /** Resolve the full speech configuration for a dialect. */
 export function getSpeechConfig(dialect: Dialect) {
   const cfg = DIALECT_CONFIG[parseDialect(dialect)]
+  // Mirror the provider chain in speech/tts.ts: fish-audio (primary when the
+  // key exists) -> msedge. An explicit TTS_PROVIDER="msedge" forces Edge.
+  const ttsProvider =
+    process.env.FISH_AUDIO_API_KEY && process.env.TTS_PROVIDER !== 'msedge'
+      ? 'fish-audio'
+      : process.env.TTS_PROVIDER || 'msedge'
   return {
     dialect,
     language: 'ar' as const,
     locale: cfg.locale,
-    ttsProvider: process.env.TTS_PROVIDER || 'msedge',
+    ttsProvider,
     sttProvider: process.env.STT_PROVIDER || 'groq',
     voiceIds: cfg.edgeVoices,
     sttBiasPrompt: cfg.sttBiasPrompt,

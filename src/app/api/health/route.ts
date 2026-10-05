@@ -19,9 +19,12 @@ export async function GET() {
     time: new Date().toISOString(),
     checks: {
       database: dbOk ? 'up' : 'down',
-      tts: 'msedge (no key required)',
-      stt: process.env.GROQ_API_KEY ? 'groq' : 'not_configured',
-      ai: process.env.GROQ_API_KEY ? 'groq' : 'fallback_engine',
+      // Configuration flags only — NO keys, NO endpoints, NO upstream detail.
+      tts: process.env.FISH_AUDIO_API_KEY
+        ? 'fish-audio (+msedge fallback)'
+        : 'msedge (no key required)',
+      stt: process.env.GROQ_API_KEY ? 'groq-whisper' : 'not_configured',
+      ai: process.env.GROQ_API_KEY ? 'groq-llama-3.3-70b' : 'fallback_engine',
     },
   }
 

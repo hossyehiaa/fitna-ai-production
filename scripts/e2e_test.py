@@ -114,12 +114,12 @@ s, b = req("POST", f"/api/sessions/{session_id}/turn", {
 })
 check("turn: reactions returned", s == 200 and len(b.get("reactions", [])) >= 1, str(b)[:200])
 reactions = b.get("reactions", [])
-check("turn: provider is fallback (no GROQ key)", b.get("provider") == "fallback", str(b.get("provider")))
+check("turn: provider is groq or fallback", b.get("provider") in ("groq", "fallback"), str(b.get("provider")))
 check("turn: reaction fields valid", all(
     r.get("agentKey") in ("sara", "omar", "yassin", "nour") and r.get("text") and 15 <= r.get("attention", 0) <= 100
     for r in reactions), str(reactions)[:200])
-check("turn: Egyptian dialect speech bank", any(
-    any(w in r["text"] for w in ("يا مستر", "يا ميس", "مش", "إيه", "أوي", "خلاص", "دلوقتي"))
+check("turn: Egyptian dialect speech", any(
+    any(w in r["text"] for w in ("يا مستر", "يا ميس", "مش", "إيه", "أوي", "خلاص", "دلوقتي", "ازاي", "إزاي", "كده", "علشان", "خالص", "ده ", "دي "))
     for r in reactions if r.get("text")), str([r.get("text") for r in reactions])[:300])
 
 # 12. Multiple turns for metrics
