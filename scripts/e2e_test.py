@@ -6,7 +6,8 @@ import urllib.request
 import urllib.error
 import sys
 
-BASE = "http://localhost:3000"
+import os
+BASE = os.environ.get("E2E_BASE", "http://localhost:3000")
 RUN = str(int(time.time()))
 EMAIL = f"e2e-{RUN}@teacher.test"
 PASSWORD = "Passw0rd123"
