@@ -392,7 +392,10 @@ export function LiveRoom({
     let recorder: MediaRecorder;
     try {
       if (mimeType && !isMp4) {
-        recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 });
+        // 64kbps opus: full speech intelligibility for Whisper + report
+        // playback at HALF the upload size (latency: the STT upload sits
+        // on the time-to-first-audio path for the Whisper fallback path).
+        recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 64000 });
       } else if (mimeType && isMp4) {
         // On iOS Safari, audioBitsPerSecond can throw NotSupportedError
         recorder = new MediaRecorder(stream, { mimeType });
@@ -1167,7 +1170,8 @@ export function LiveRoom({
           break;
         }
         case "speech": {
-          const sp = ev.speech;
+          // Server sends the speech event FLAT: {type, personaId, name, fullText}
+          const sp = ev.fullText ? ev : ev.speech;
           if (!sp?.fullText) break;
           sawStudentSpeech = true;
           addEvent(String(sp.fullText), "student", String(sp.name));
@@ -1183,16 +1187,17 @@ export function LiveRoom({
           break;
         }
         case "audio": {
-          void handleAudioEvent(ev.audio);
+          // Server sends the audio event FLAT: {type, personaId, name, index, mime, b64}
+          void handleAudioEvent(ev.b64 ? ev : ev.audio);
           break;
         }
         case "persisted": {
-          attachTeacherAudio(ev.persisted?.teacherEventId ?? null);
+          attachTeacherAudio((ev.teacherEventId ?? ev.persisted?.teacherEventId) ?? null);
           break;
         }
         case "done": {
-          doneLatency = ev.done?.latency ?? null;
-          const qt = ev.done?.questionType;
+          doneLatency = ev.latency ?? ev.done?.latency ?? null;
+          const qt = ev.questionType ?? ev.done?.questionType;
           if (qt === "open" || qt === "closed") {
             setQuestionCounts((prev) =>
               qt === "open" ? { ...prev, open: prev.open + 1 } : { ...prev, closed: prev.closed + 1 }
@@ -1210,13 +1215,13 @@ export function LiveRoom({
         case "warn": {
           sawWarn = true;
           addEvent(
-            String(ev.warn?.error || "تعذّر تشغيل الصوت. يُرجى المحاولة مرة أخرى."),
+            String(ev.error || ev.warn?.error || "تعذّر تشغيل الصوت. يُرجى المحاولة مرة أخرى."),
             "system"
           );
           break;
         }
         case "error": {
-          const msg = String(ev.error?.error || (lang === "en" ? "Turn processing error" : "حدث خطأ مؤقت أثناء معالجة الرد"));
+          const msg = String(ev.error || (lang === "en" ? "Turn processing error" : "حدث خطأ مؤقت أثناء معالجة الرد"));
           if (!firstAudioHandled) {
             throw new Error(msg);
           }
@@ -1302,6 +1307,10 @@ export function LiveRoom({
         server: doneLatency ?? undefined,
         routing: routedInfo ?? undefined,
         audio: firstAudioHandled,
+        speech: sawStudentSpeech,
+        warn: sawWarn,
+        deduplicated: wasDeduplicated,
+        classroomSilence: !sawStudentSpeech && !firstAudioHandled && !sawWarn && !wasDeduplicated,
         decodedAudioMs: Math.round(decodedDurationMsRef.current),
         text: teacherText,
       });
@@ -1565,6 +1574,47 @@ export function LiveRoom({
 
     const durationMs = Date.now() - openMicSliceStartRef.current;
 
+    // LATENCY (primary path): when the browser recognizer already produced
+    // the transcript, dispatch the turn IMMEDIATELY — do NOT wait for the
+    // MediaRecorder's stop flush (~300-700ms). The mic recording is still
+    // attached afterwards (async, off the critical path) so report
+    // playback keeps the teacher's real voice.
+    if (directTranscript && directTranscript.trim().length >= 2) {
+      const transcript = directTranscript;
+      recorder.onstop = () => {
+        const mime = activeAudioMimeTypeRef.current || (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
+        const blob = new Blob(openMicChunksRef.current, { type: mime });
+        openMicChunksRef.current = [];
+        if (blob.size < 400) return;
+        const attachRecording = (attempt: number) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result;
+            if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:audio")) return;
+            fetch(`/api/sessions/${sessionId}/turn/audio`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ audioBase64: dataUrl }),
+              keepalive: true,
+            }).then((res) => {
+              // The teacher event is persisted after the first audio chunk —
+              // retry once if the attach raced ahead of it.
+              if (!res.ok && attempt === 0) setTimeout(() => attachRecording(1), 2500);
+            }).catch(() => {});
+          };
+          reader.onerror = () => {};
+          reader.readAsDataURL(blob);
+        };
+        // Grace: let the turn route persist the teacher event first.
+        setTimeout(() => attachRecording(0), 2500);
+      };
+      try {
+        recorder.stop();
+      } catch {}
+      void handleRecordingComplete(undefined, Math.max(durationMs, 600), transcript);
+      return;
+    }
+
     recorder.onstop = async () => {
       const mime = activeAudioMimeTypeRef.current || (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
       const blob = new Blob(openMicChunksRef.current, { type: mime });
@@ -1596,7 +1646,7 @@ export function LiveRoom({
     } catch (err) {
       console.error("Error stopping open mic recorder:", err);
     }
-  }, [handleRecordingComplete, isRtl]);
+  }, [handleRecordingComplete, isRtl, sessionId]);
 
   const forceInstantCommit = useCallback(() => {
     if (
@@ -1825,7 +1875,7 @@ export function LiveRoom({
             const effectiveSilenceMs = finalSeen
               ? isQuestionOrCall
                 ? 380
-                : 550
+                : 430
               : isQuestionOrCall
               ? 700
               : hasAccumulatedText

@@ -139,20 +139,20 @@ export function createSentenceChunker(onChunk: (text: string, index: number) => 
         return;
       }
       const comma = t.indexOf("،");
-      if (comma >= 8 && comma <= 70) {
+      if (comma >= 8 && comma <= 55) {
         emitUpTo(comma + 1);
         return;
       }
-      if (enderPos >= 4 && enderPos <= 70) {
+      if (enderPos >= 4 && enderPos <= 55) {
         let end = m.index + m[0].length;
         while (end < t.length && /[.!?؟…»"']/.test(t[end])) end += 1;
         if (/\s/.test(t[end] ?? "")) end += 1;
         emitUpTo(end);
         return;
       }
-      if (t.length >= 70) {
-        const sp = t.lastIndexOf(" ", 70);
-        emitUpTo(sp > 20 ? sp : 70);
+      if (t.length >= 55) {
+        const sp = t.lastIndexOf(" ", 55);
+        emitUpTo(sp > 20 ? sp : 55);
       }
       return;
     }

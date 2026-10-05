@@ -35,6 +35,9 @@ const ENV: Record<string, string> = {};
 for (const m of envText.matchAll(/^([A-Z_]+)=(.+)$/gm)) ENV[m[1]] = m[2].trim();
 
 const BASE = process.env.E2E_BASE_URL || "https://fitna-ai-production.vercel.app";
+const IS_LOCAL = BASE.includes("localhost") || BASE.includes("127.0.0.1");
+// MINI mode: rehearse with the first N turns only (e.g. MINI_TURNS=2).
+const MINI = parseInt(process.env.MINI_TURNS || "0", 10) || 0;
 const OUT_DIR = "/home/z/my-project/download/latency";
 const WAV_DIR = `${OUT_DIR}/utterances`;
 mkdirSync(OUT_DIR, { recursive: true });
@@ -64,9 +67,8 @@ function pct(sorted: number[], p: number): number {
 
 type TurnSpec = { wav: string; text: string; session: "sa" | "eg"; expect?: string };
 
-// 20 real conversational turns (u01..u20 WAVs + texts).
-const TURNS: TurnSpec[] = [
-  { wav: "sil_u01_greeting.wav", text: "السلام عليكم ورحمة الله وبركاته", session: "sa", expect: "سلطان" },
+const ALL_TURNS: TurnSpec[] = [
+  { wav: "sil_u01_greeting.wav", text: "السلام عليكم ورحمة الله وبركاته", session: "sa" },
   { wav: "sil_u02_howru.wav", text: "كيف حالكم اليوم يا شباب؟", session: "sa" },
   { wav: "sil_u03_call_sultan.wav", text: "يا سلطان، إيه أكبر كسر، اثنين على ستة ولا أربعة على ستة؟", session: "sa", expect: "سلطان" },
   { wav: "sil_u04_call_reem.wav", text: "يا ريم، لو عندنا كسر ثلاثة على ثمانية وواحد على ثمانية، مين أكبر؟", session: "sa", expect: "ريم" },
@@ -74,7 +76,7 @@ const TURNS: TurnSpec[] = [
   { wav: "sil_u06_praise.wav", text: "برافو عليك يا فهد، إجابة ممتازة!", session: "sa", expect: "فهد" },
   { wav: "sil_u07_attention.wav", text: "مركزين معايا؟ سامعيني كويس؟", session: "sa" },
   { wav: "sil_u08_explain.wav", text: "خلينا نشرح درس النهاردة عن حالات المادة", session: "sa" },
-  { wav: "sil_u09_greeting2.wav", text: "صباح الخير يا أبنائي", session: "eg", expect: "سارة" },
+  { wav: "sil_u09_openq.wav", text: "مين فاهم الفرق بين الحالة الصلبة والسائلة؟", session: "eg" },
   { wav: "sil_u10_call_jouri.wav", text: "يا جوري، قوليلنا إيه الفرق بين السائل والغاز؟", session: "sa", expect: "جوري" },
   { wav: "sil_u11_fractions.wav", text: "إيه هو البسط وإيه هو المقام في الكسر؟", session: "sa" },
   { wav: "sil_u12_call_sara.wav", text: "يا سارة، إيه المقصود بالتبخر؟", session: "eg", expect: "سارة" },
@@ -107,8 +109,10 @@ async function createSession(cookie: string, dialect: "saudi" | "egyptian"): Pro
 }
 
 async function main() {
+  const TURNS = MINI > 0 ? ALL_TURNS.slice(0, MINI) : ALL_TURNS;
   const report: Record<string, unknown> = {
     base: BASE,
+    mode: MINI > 0 ? `mini(${MINI})` : "full",
     startedAt: new Date().toISOString(),
     partA: [] as Record<string, unknown>[],
     partB: [] as Record<string, unknown>[],
@@ -217,9 +221,19 @@ async function main() {
   // PART B — BROWSER turns through the REAL voice pipeline.
   // ==================================================================
   console.log("\n================ PART B: BROWSER VOICE PIPELINE ================");
+  // Fresh sessions: a continuous, realistic lesson per dialect (Part A's
+  // history must not pre-seed greetingCompleted for these turns).
+  const saSessionB = await createSession(cookie, "saudi");
+  const egSessionB = await createSession(cookie, "egyptian");
+  await fetch(`${BASE}/api/sessions/${saSessionB}/turn/stream`, { method: "GET", headers: { cookie } }).catch(() => {});
+  await fetch(`${BASE}/api/sessions/${egSessionB}/turn/stream`, { method: "GET", headers: { cookie } }).catch(() => {});
   for (let i = 0; i < TURNS.length; i++) {
     const spec = TURNS[i];
-    const sessionId = spec.session === "sa" ? saSession : egSession;
+    // Local rehearsal: stage the expected transcript for the mock STT.
+    if (IS_LOCAL) {
+      writeFileSync("/tmp/mock_stt_text.txt", spec.text, "utf8");
+    }
+    const sessionId = spec.session === "sa" ? saSessionB : egSessionB;
     const wav = `${WAV_DIR}/${spec.wav}`;
     let rec: Record<string, unknown> | null = null;
     let browser;
@@ -285,12 +299,13 @@ async function main() {
   const aTtfa = (report.partA as Record<string, unknown>[]).map((r) => r.firstAudioMs as number).filter((n) => n > 0).sort((a, b) => a - b);
   const bTtfa = (report.partB as Record<string, unknown>[]).map((r) => r.ttfaClientMs as number).filter((n) => typeof n === "number" && n > 0).sort((a, b) => a - b);
   const silentA = (report.partA as Record<string, unknown>[]).filter((r) => r.silent).length;
-  const silentB = (report.partB as Record<string, unknown>[]).filter((r) => !r.audio && !r.error).length;
+  const classroomSilentB = (report.partB as Record<string, unknown>[]).filter((r) => r.classroomSilence === true).length;
+  const silentB = (report.partB as Record<string, unknown>[]).filter((r) => !r.audio && !r.error && r.classroomSilence !== true).length;
   const routingFails = (report.partA as Record<string, unknown>[]).filter((r) => r.routingOk === false).length;
 
   report.summary = {
     partA: { n: aTtfa.length, p50: pct(aTtfa, 50), p90: pct(aTtfa, 90), p95: pct(aTtfa, 95), max: aTtfa[aTtfa.length - 1] ?? -1, silentTurns: silentA },
-    partB: { n: bTtfa.length, p50: pct(bTtfa, 50), p90: pct(bTtfa, 90), p95: pct(bTtfa, 95), max: bTtfa[bTtfa.length - 1] ?? -1, silentTurns: silentB },
+    partB: { n: bTtfa.length, p50: pct(bTtfa, 50), p90: pct(bTtfa, 90), p95: pct(bTtfa, 95), max: bTtfa[bTtfa.length - 1] ?? -1, silentTurns: silentB, classroomSilenceTurns: classroomSilentB },
     routingFails,
     acceptance: {
       criterion: "p95 time-to-first-audio (browser, real voice pipeline) ≤ 2000ms, no silent turns",

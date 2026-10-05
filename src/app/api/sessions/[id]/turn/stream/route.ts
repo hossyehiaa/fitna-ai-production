@@ -128,18 +128,74 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: "لم يتم التقاط أي كلام" }, { status: 400 });
   }
 
-  // Session row first — ownership gate (same checks as the legacy route).
-  const { data: session } = await supabase
+  // LATENCY: the ownership-gate session row, students, profile and capped
+  // events ALL run in ONE parallel wave (was: sequential auth → session →
+  // batch = 3 round-trip waves). Classify LLM needs only the transcript,
+  // so it rides the same wave.
+  const sessionQ = supabase
     .from("sessions")
     .select("id, teacher_id, status, lesson_context, started_at, dialect")
     .eq("id", sessionId)
-    .single();
+    .maybeSingle();
+  const studentsQ = supabase
+    .from("session_students")
+    .select("id, persona_id, final_attention, times_spoken")
+    .eq("session_id", sessionId);
+  const profileQ = supabase.from("users").select("full_name").eq("id", user.id).single();
+  const eventsQ = supabase
+    .from("session_events")
+    .select("actor, content, event_type, metadata, occurred_at_ms")
+    .eq("session_id", sessionId)
+    .order("occurred_at_ms", { ascending: false })
+    .limit(EVENTS_CAP);
+
+  const classifyPromise = classifyTeacherUtterance(teacherText).catch(() => "statement" as QuestionType);
+
+  const [sessionRes, studentsRes, profileRes, eventsRes] = await Promise.all([
+    sessionQ,
+    studentsQ,
+    profileQ,
+    eventsQ,
+  ]);
+  const session = sessionRes.data as { id?: string; teacher_id?: string; status?: string; lesson_context?: string | null; started_at?: string | null; dialect?: string | null } | null;
   if (!session || session.teacher_id !== user.id) {
     return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
   }
   if (session.status !== "in_progress") {
     return NextResponse.json({ error: "انتهت هذه الجلسة بالفعل" }, { status: 400 });
   }
+
+  const sessionStudents = (studentsRes.data ?? []) as {
+    id: string;
+    persona_id: string;
+    final_attention: number | null;
+    times_spoken: number | null;
+  }[];
+  const teacherFullName =
+    (profileRes.data as { full_name?: string } | null)?.full_name ||
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (user as any).user_metadata?.full_name ||
+    user.email ||
+    "";
+
+  // Personas: immutable character identities → module cache.
+  const personaIds = sessionStudents.map((s) => s.persona_id);
+  const cacheKey = [...personaIds].sort().join(",");
+  let personas: Persona[] = [];
+  const cached = personaCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < PERSONA_CACHE_TTL_MS) {
+    personas = cached.rows;
+  } else if (personaIds.length > 0) {
+    const { data: personaRows } = await supabase.from("student_personas").select("*").in("id", personaIds);
+    personas = (personaRows as Persona[]) ?? [];
+    personaCache.set(cacheKey, { at: Date.now(), rows: personas });
+    if (personaCache.size > 32) {
+      const firstKey = personaCache.keys().next().value as string;
+      personaCache.delete(firstKey);
+    }
+  }
+  const tDb = Date.now();
+  const dbMs = tDb - tAuth;
 
   const encoder = new TextEncoder();
   const abortSignal = request.signal;
@@ -159,63 +215,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const L: Record<string, any> = {};
       L.authMs = tAuth - t0;
+      L.dbMs = dbMs;
 
       try {
-        // -----------------------------------------------------------
-        // PARALLEL DB BATCH (replaces 6 sequential round trips):
-        // students + teacher profile + capped events run concurrently.
-        // -----------------------------------------------------------
-        const studentsQ = supabase
-          .from("session_students")
-          .select("id, persona_id, final_attention, times_spoken")
-          .eq("session_id", sessionId);
-        const profileQ = supabase.from("users").select("full_name").eq("id", user.id).single();
-        const eventsQ = supabase
-          .from("session_events")
-          .select("actor, content, event_type, metadata, occurred_at_ms")
-          .eq("session_id", sessionId)
-          .order("occurred_at_ms", { ascending: false })
-          .limit(EVENTS_CAP);
-
-        // Classify LLM needs ONLY the transcript — fire it now, in parallel
-        // with the DB batch; it is awaited just before persistence (after
-        // the first audio has already reached the client).
-        const classifyPromise = classifyTeacherUtterance(teacherText).catch(() => "statement" as QuestionType);
-
-        const [studentsRes, profileRes, eventsRes] = await Promise.all([studentsQ, profileQ, eventsQ]);
-
-        const sessionStudents = (studentsRes.data ?? []) as {
-          id: string;
-          persona_id: string;
-          final_attention: number | null;
-          times_spoken: number | null;
-        }[];
-        const teacherFullName =
-          (profileRes.data as { full_name?: string } | null)?.full_name ||
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (user as any).user_metadata?.full_name ||
-          user.email ||
-          "";
-
-        // Personas: immutable character identities → module cache.
-        const personaIds = sessionStudents.map((s) => s.persona_id);
-        const cacheKey = [...personaIds].sort().join(",");
-        let personas: Persona[] = [];
-        const cached = personaCache.get(cacheKey);
-        if (cached && Date.now() - cached.at < PERSONA_CACHE_TTL_MS) {
-          personas = cached.rows;
-        } else if (personaIds.length > 0) {
-          const { data: personaRows } = await supabase.from("student_personas").select("*").in("id", personaIds);
-          personas = (personaRows as Persona[]) ?? [];
-          personaCache.set(cacheKey, { at: Date.now(), rows: personas });
-          if (personaCache.size > 32) {
-            const firstKey = personaCache.keys().next().value as string;
-            personaCache.delete(firstKey);
-          }
-        }
-        const tDb = Date.now();
-        L.dbMs = tDb - tAuth;
-
         // -----------------------------------------------------------
         // Memory structures (mirror of the legacy route, capped input).
         // -----------------------------------------------------------
@@ -296,11 +298,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         }
 
         const lastStudentEvent = descendingEvents.find((e) => e.event_type === "student_response");
-        const lastSpeakingPersonaId = lastStudentEvent ? lastStudentEvent.actor : null;
+        const lastSpeakingPersonaId = lastStudentEvent ? (lastStudentEvent.actor as string | null) : null;
         const lastSpeakingStudentName = lastStudentEvent ? personaNameById.get(lastStudentEvent.actor as string) ?? null : null;
         const recentSpeakerPersonaIds = descendingEvents
           .filter((e) => e.event_type === "student_response")
-          .map((e) => e.actor)
+          .map((e) => e.actor as string)
+          .filter((a): a is string => Boolean(a))
           .slice(0, 3);
         const turnIndex = descendingEvents.filter((e) => e.event_type === "teacher_utterance").length + 1;
 
@@ -413,7 +416,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           lastSpeakingStudentName,
           greetingCompleted,
           lastTeacherUtterance,
-          lessonContext: session.lesson_context,
+          lessonContext: session.lesson_context ?? null,
           teacherUtterance: teacherText,
           questionType: "statement",
           recentHistory,
@@ -542,13 +545,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
             const row = sessionStudents.find((s) => s.persona_id === p.id);
             if (row) {
               updatePromises.push(
-                supabase
-                  .from("session_students")
-                  .update({
-                    final_attention: clamp((currentAttention[p.id] ?? 70) + delta, 0, 100),
-                    times_spoken: sp ? row.times_spoken + 1 : row.times_spoken,
-                  })
-                  .eq("id", row.id)
+                Promise.resolve(
+                  supabase
+                    .from("session_students")
+                    .update({
+                      final_attention: clamp((currentAttention[p.id] ?? 70) + delta, 0, 100),
+                      times_spoken: sp ? (row.times_spoken ?? 0) + 1 : (row.times_spoken ?? 0),
+                    })
+                    .eq("id", row.id)
+                )
               );
             }
           }
@@ -627,14 +632,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         if (plan.isSilent) {
           // SILENCE IS A VALID ACTION — cards update, no audio, explicit
           // client-side "students listened" feedback (no silent failure).
-          await persistTurn();
+          if (!persistencePromise) persistencePromise = persistTurn();
+          await persistencePromise;
         } else {
           // Explicit-address enforcement: ONLY the named character speaks.
           let speakers = plan.decision.candidateSpeakers;
           if (explicitTarget) speakers = speakers.filter((c) => c.personaId === explicitTarget.personaId);
 
           if (speakers.length === 0) {
-            await persistTurn();
+            if (!persistencePromise) persistencePromise = persistTurn();
+            await persistencePromise;
           } else {
             for (const candidate of speakers) {
               const persona = personas.find((p) => p.id === candidate.personaId);
@@ -678,7 +685,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   confidence: studentBrain?.confidence ?? 70,
                   emotion: candidate.spokenEmotion || "confident",
                   reasonToSpeak: candidate.reasonToSpeak,
-                  lessonContext: plan.isGreeting ? null : session.lesson_context,
+                  lessonContext: plan.isGreeting ? null : session.lesson_context ?? null,
                   teacherUtterance: teacherText,
                   recentHistory: recentHistory.slice(-3500),
                   currentQuestionText: plan.currentQuestionText,
