@@ -505,7 +505,7 @@ function sanitizeSaudiStudentResponse(
   return text || `أيوه ${cleanTitle} معك.`;
 }
 
-export async function generateStudentReactions(params: {
+export type TurnPlanParams = {
   personas: Persona[];
   currentAttention: Record<string, number>;
   timesSpoken?: Record<string, number>;
@@ -531,13 +531,41 @@ export async function generateStudentReactions(params: {
   dialect?: string;
   /** Actual classroom participant names — drives name-based routing. */
   participantNames?: string[];
-}): Promise<StudentTurnResult[]> {
+};
+
+/**
+ * Shared turn plan: converts DB personas to brain states, runs the intent
+ * analyzer + classroom decision engine, resolves the teacher title and all
+ * question-context flags. Used by BOTH the legacy non-streaming path
+ * (generateStudentReactions) and the low-latency streaming turn route so
+ * the two pipelines make IDENTICAL classroom decisions.
+ */
+export type TurnPlan = {
+  dialect: Dialect;
+  saudiClassmates: string[];
+  studentBrains: StudentBrainState[];
+  intentAnalysis: ReturnType<typeof analyzeTeacherIntent>;
+  decision: DecisionResult;
+  title: string;
+  cleanTitle: string;
+  isRedirectOrCalling: boolean;
+  currentQuestionText: string;
+  qContext: QuestionContext;
+  isCommonDenominatorTaught: boolean;
+  isGreeting: boolean;
+  isRollCall: boolean;
+  isEnglish: boolean;
+  isCorrectiveFeedback: boolean;
+  systemPrompt: string;
+  isSilent: boolean;
+  silentReactions: StudentTurnResult[] | null;
+};
+
+export function buildTurnPlan(params: TurnPlanParams): TurnPlan {
   const {
     personas,
     currentAttention,
     timesSpoken = {},
-    lastSpeakingPersonaId = null,
-    recentSpeakerPersonaIds = [],
     lastPhysicalActions = {},
     lastSpeakingStudentName = null,
     greetingCompleted = false,
@@ -546,8 +574,6 @@ export async function generateStudentReactions(params: {
     teacherUtterance,
     recentHistory,
     fullLessonHistory = "",
-    teacherExplanations = [],
-    studentContributions = {},
     studentsWithHandRaised = [],
     turnIndex = 1,
     voiceGender = null,
@@ -556,6 +582,10 @@ export async function generateStudentReactions(params: {
     teacherFullName,
     dialect: dialectInput,
     participantNames = [],
+    lastSpeakingPersonaId = null,
+    recentSpeakerPersonaIds = [],
+    teacherExplanations = [],
+    studentContributions = {},
   } = params;
 
   const dialect = parseDialect(dialectInput);
@@ -593,10 +623,10 @@ export async function generateStudentReactions(params: {
   );
 
   // 3. SILENCE IS A VALID ACTION:
-  // If no student has motivation/permission to speak (e.g. during teacher explanation, silence command, or silent listening):
-  // Return immediately without calling LLM!
+  // If no student has motivation/permission to speak (e.g. during teacher
+  // explanation, silence command, or silent listening): no LLM is needed.
   if (decision.candidateSpeakers.length === 0) {
-    return personas.map((p) => {
+    const silentReactions: StudentTurnResult[] = personas.map((p) => {
       const updated = decision.updatedStudents.find((s) => s.personaId === p.id);
       const action = updated?.physicalAction ?? "attentive";
       const desc = updated?.actionDescriptionAr ?? getActionDescription(action, p.name);
@@ -614,9 +644,16 @@ export async function generateStudentReactions(params: {
         actionDescriptionAr: desc,
       };
     });
+    return {
+      dialect, saudiClassmates, studentBrains, intentAnalysis, decision,
+      title: "", cleanTitle: "", isRedirectOrCalling: false, currentQuestionText: teacherUtterance,
+      qContext: extractQuestionContext(teacherUtterance), isCommonDenominatorTaught: false,
+      isGreeting: false, isRollCall: false, isEnglish: false, isCorrectiveFeedback: false,
+      systemPrompt: "", isSilent: true, silentReactions,
+    };
   }
 
-  // 4. Single-Speaker Pipeline (Spec: Turn manager selects 0 or 1 speaker; only active candidate calls LLM, other 3 students silent in code)
+  // 4. Resolve teacher title + question context for the speaking pipeline
   const teacherInfo = extractTeacherTitleAndGender(teacherUtterance, recentHistory, voiceGender, lockedTeacherTitle, teacherFullName);
   const title = dialect === "saudi" ? teacherTitleForDialect(teacherInfo.title, "saudi") : teacherInfo.title;
   const cleanTitle = title.startsWith("يا ") ? title : `يا ${title}`;
@@ -655,64 +692,135 @@ export async function generateStudentReactions(params: {
 
   const systemPrompt = buildClassroomSwarmSystemPrompt(isGreeting ? null : lessonContext, dialect, saudiClassmates);
 
-  async function generateSpeechForCandidate(candidate: (typeof decision.candidateSpeakers)[0]): Promise<string | null> {
-    // 1. Direct, instant, natural responses for classroom conversational rituals (Zero hallucination):
-    if (isGreeting) {
-      if (dialect === "saudi") {
-        if (/صباح\s*الخير/i.test(teacherUtterance)) {
-          return `صباح الخير ${cleanTitle}! الحمد لله تمام.`;
-        }
-        if (/مساء\s*الخير/i.test(teacherUtterance)) {
-          return `مساء الخير ${cleanTitle}!`;
-        }
-        if (/سلام/i.test(teacherUtterance)) {
-          return `وعليكم السلام ${cleanTitle}! الحمد لله تمام.`;
-        }
-        if (/كيف\s*(?:حالكم|حالك|القلوب)|عاملين|اخباركم/i.test(teacherUtterance)) {
-          return `الحمد لله ${cleanTitle} تمام، وأنت كيفك؟`;
-        }
-        if (/سامعيني|صوتي\s*واضح/i.test(teacherUtterance)) {
-          return `أيوه ${cleanTitle} سامعينك واضح!`;
-        }
-        return `هلا ${cleanTitle}! الحمد لله تمام.`;
-      }
+  return {
+    dialect, saudiClassmates, studentBrains, intentAnalysis, decision,
+    title, cleanTitle, isRedirectOrCalling, currentQuestionText, qContext,
+    isCommonDenominatorTaught, isGreeting, isRollCall, isEnglish, isCorrectiveFeedback,
+    systemPrompt, isSilent: false, silentReactions: null,
+  };
+}
+
+/**
+ * Deterministic instant replies for classroom conversational rituals
+ * (greetings, blessings, attention checks, farewells). Shared by the
+ * legacy and streaming pipelines — these NEVER call the LLM, so the
+ * first audible response to "السلام عليكم" leaves the server in
+ * milliseconds.
+ */
+export function ritualFastReply(
+  intentAnalysis: ReturnType<typeof analyzeTeacherIntent>,
+  teacherUtterance: string,
+  dialect: Dialect,
+  cleanTitle: string
+): string | null {
+  if (intentAnalysis.intent === "greeting") {
+    if (dialect === "saudi") {
       if (/صباح\s*الخير/i.test(teacherUtterance)) {
-        return `صباح النور ${cleanTitle}! الحمد لله كويسين.`;
+        return `صباح الخير ${cleanTitle}! الحمد لله تمام.`;
       }
       if (/مساء\s*الخير/i.test(teacherUtterance)) {
-        return `مساء النور ${cleanTitle}!`;
+        return `مساء الخير ${cleanTitle}!`;
       }
       if (/سلام/i.test(teacherUtterance)) {
-        return `وعليكم السلام ${cleanTitle}! الحمد لله كويسين.`;
+        return `وعليكم السلام ${cleanTitle}! الحمد لله تمام.`;
       }
-      if (/عاملين\s*(?:ايه|إيه|اي)|ازيكم|ازيكو/i.test(teacherUtterance)) {
-        return `الحمد لله ${cleanTitle} تمام، حضرتك عامل${cleanTitle.includes("ميس") ? "ة" : ""} إيه؟`;
+      if (/كيف\s*(?:حالكم|حالك|القلوب)|عاملين|اخباركم/i.test(teacherUtterance)) {
+        return `الحمد لله ${cleanTitle} تمام، وأنت كيفك؟`;
       }
       if (/سامعيني|صوتي\s*واضح/i.test(teacherUtterance)) {
-        return `أيوه ${cleanTitle} سامعين حضرتك كويس!`;
+        return `أيوه ${cleanTitle} سامعينك واضح!`;
       }
-      return `أهلاً ${cleanTitle}! الحمد لله كويسين.`;
+      return `هلا ${cleanTitle}! الحمد لله تمام.`;
     }
+    if (/صباح\s*الخير/i.test(teacherUtterance)) {
+      return `صباح النور ${cleanTitle}! الحمد لله كويسين.`;
+    }
+    if (/مساء\s*الخير/i.test(teacherUtterance)) {
+      return `مساء النور ${cleanTitle}!`;
+    }
+    if (/سلام/i.test(teacherUtterance)) {
+      return `وعليكم السلام ${cleanTitle}! الحمد لله كويسين.`;
+    }
+    if (/عاملين\s*(?:ايه|إيه|اي)|ازيكم|ازيكو/i.test(teacherUtterance)) {
+      return `الحمد لله ${cleanTitle} تمام، حضرتك عامل${cleanTitle.includes("ميس") ? "ة" : ""} إيه؟`;
+    }
+    if (/سامعيني|صوتي\s*واضح/i.test(teacherUtterance)) {
+      return `أيوه ${cleanTitle} سامعين حضرتك كويس!`;
+    }
+    return `أهلاً ${cleanTitle}! الحمد لله كويسين.`;
+  }
 
-    if (intentAnalysis.intent === "religious_blessing") {
-      return "عليه أفضل الصلاة والسلام.";
-    }
+  if (intentAnalysis.intent === "religious_blessing") {
+    return "عليه أفضل الصلاة والسلام.";
+  }
 
-    if (intentAnalysis.intent === "teacher_identity") {
-      return `آسفين ${cleanTitle} خلاص حفظنا!`;
-    }
+  if (intentAnalysis.intent === "teacher_identity") {
+    return `آسفين ${cleanTitle} خلاص حفظنا!`;
+  }
 
-    if (intentAnalysis.intent === "attention_check") {
-      return dialect === "saudi"
-        ? `معك ${cleanTitle} ومركّزين!`
-        : `معاك${cleanTitle.includes("ميس") ? "ِ" : ""} ${cleanTitle} ومركزين!`;
-    }
+  if (intentAnalysis.intent === "attention_check") {
+    return dialect === "saudi"
+      ? `معك ${cleanTitle} ومركّزين!`
+      : `معاك${cleanTitle.includes("ميس") ? "ِ" : ""} ${cleanTitle} ومركزين!`;
+  }
 
-    if (intentAnalysis.intent === "session_farewell") {
-      return dialect === "saudi"
-        ? `مع السلامة ${cleanTitle}! شكراً لك.`
-        : `مع السلامة ${cleanTitle}! شكراً لحضرتك.`;
-    }
+  if (intentAnalysis.intent === "session_farewell") {
+    return dialect === "saudi"
+      ? `مع السلامة ${cleanTitle}! شكراً لك.`
+      : `مع السلامة ${cleanTitle}! شكراً لحضرتك.`;
+  }
+
+  return null;
+}
+
+export async function generateStudentReactions(params: {
+  personas: Persona[];
+  currentAttention: Record<string, number>;
+  timesSpoken?: Record<string, number>;
+  lastSpeakingPersonaId?: string | null;
+  recentSpeakerPersonaIds?: string[];
+  lastPhysicalActions?: Record<string, StudentPhysicalAction>;
+  lastSpeakingStudentName?: string | null;
+  greetingCompleted?: boolean;
+  lastTeacherUtterance?: string | null;
+  lessonContext: string | null;
+  teacherUtterance: string;
+  questionType: QuestionType;
+  recentHistory: string;
+  fullLessonHistory?: string;
+  teacherExplanations?: string[];
+  studentContributions?: Record<string, string[]>;
+  studentsWithHandRaised?: string[];
+  turnIndex?: number;
+  voiceGender?: "male" | "female" | null;
+  lockedTeacherTitle?: string | null;
+  resolvedUnknownNames?: string[];
+  teacherFullName?: string;
+  dialect?: string;
+  /** Actual classroom participant names — drives name-based routing. */
+  participantNames?: string[];
+}): Promise<StudentTurnResult[]> {
+  const {
+    personas,
+    lessonContext,
+    teacherUtterance,
+    recentHistory,
+    teacherExplanations = [],
+    studentContributions = {},
+    fullLessonHistory = "",
+  } = params;
+
+  const plan = buildTurnPlan(params);
+  if (plan.isSilent) return plan.silentReactions!;
+
+  const { dialect, saudiClassmates, studentBrains, intentAnalysis, decision, title, cleanTitle, currentQuestionText, qContext, isCommonDenominatorTaught, isGreeting, isCorrectiveFeedback, systemPrompt } = plan;
+
+  // Single-Speaker Pipeline (Spec: Turn manager selects 0 or 1 speaker; only active candidate calls LLM, other 3 students silent in code)
+
+  async function generateSpeechForCandidate(candidate: (typeof decision.candidateSpeakers)[0]): Promise<string | null> {
+    // 1. Direct, instant, natural responses for classroom conversational rituals (Zero hallucination):
+    const fast = ritualFastReply(intentAnalysis, teacherUtterance, dialect, cleanTitle);
+    if (fast) return fast;
 
     const studentBrain = studentBrains.find((s) => s.personaId === candidate.personaId);
     const persona = personas.find((p) => p.id === candidate.personaId);
@@ -1052,6 +1160,7 @@ export function generateFallbackReactions(params: {
     fullLessonHistory = "",
     teacherFullName,
     dialect: dialectInput,
+    participantNames = [],
   } = params;
 
   const dialect = parseDialect(dialectInput);

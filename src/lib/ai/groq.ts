@@ -79,3 +79,66 @@ export async function callGroqWithFallback(
 
   throw lastError;
 }
+
+/**
+ * STREAMING variant of callGroqWithFallback — same model chain + 404 walk,
+ * but the completion is consumed as an SSE token stream. Each content delta
+ * is forwarded to onDelta the instant it arrives so the caller can start
+ * downstream work (TTS, transport) before the completion finishes.
+ *
+ * Returns the full assembled text. Caller-aborts (AbortSignal) propagate
+ * immediately without walking the chain.
+ */
+export async function callGroqStreamWithFallback(
+  params: Parameters<typeof groq.chat.completions.create>[0],
+  onDelta: (textDelta: string) => void,
+  options?: { signal?: AbortSignal }
+): Promise<{ text: string; model: string }> {
+  let lastError: unknown = null;
+
+  for (const model of CHAT_MODEL_CHAIN) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stream: any = await groq.chat.completions.create(
+        {
+          ...params,
+          model,
+          stream: true,
+          ...(model.startsWith("openai/gpt-oss")
+            ? { reasoning_effort: "low" as const }
+            : {}),
+        },
+        options?.signal ? { signal: options.signal } : undefined
+      );
+
+      let text = "";
+      for await (const chunk of stream) {
+        // gpt-oss models emit a separate `reasoning` delta first — we only
+        // forward real content tokens.
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta.length > 0) {
+          text += delta;
+          onDelta(delta);
+        }
+        if (options?.signal?.aborted) {
+          try { await stream.controller?.abort?.(); } catch {}
+          throw new DOMException("Aborted", "AbortError");
+        }
+      }
+      return { text, model };
+    } catch (err: unknown) {
+      lastError = err;
+      if (options?.signal?.aborted) throw err;
+      if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+      if (isModelUnavailable(err)) {
+        const status = (err as { status?: number })?.status;
+        const msg = String((err as { message?: string })?.message ?? "");
+        console.warn(`Groq stream model ${model} failed (${status}: ${msg.slice(0, 120)}), trying next fallback model...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError;
+}

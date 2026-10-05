@@ -138,7 +138,8 @@ function fishModel(): string {
 async function callFishAudio(
   referenceId: string,
   text: string,
-  apiKey: string
+  apiKey: string,
+  latencyMode: "normal" | "balanced" = "normal"
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FISH_TIMEOUT_MS);
@@ -157,7 +158,7 @@ async function callFishAudio(
         format: "mp3",
         mp3_bitrate: 128,
         normalize: true,
-        latency: "normal",
+        latency: latencyMode,
       }),
       signal: controller.signal,
     });
@@ -192,7 +193,8 @@ async function synthesizeFishAudio(
   text: string,
   personaName?: string,
   dialect: Dialect = "egyptian",
-  personaVoice?: PersonaVoice
+  personaVoice?: PersonaVoice,
+  latencyMode: "normal" | "balanced" = "normal"
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   const apiKey = process.env.FISH_AUDIO_API_KEY;
   if (!apiKey) return null;
@@ -202,7 +204,7 @@ async function synthesizeFishAudio(
   // name-based mapping only as fallback.
   const referenceId =
     personaVoice?.fishVoiceId ?? fishVoiceFor(dialect, personaName ?? "", isFemaleName(personaName));
-  return callFishAudio(referenceId, text, apiKey);
+  return callFishAudio(referenceId, text, apiKey, latencyMode);
 }
 
 // ---------------------------------------------------------------------
@@ -230,12 +232,19 @@ type CachedAudio = {
 };
 const audioCache = new Map<string, CachedAudio>();
 
+/** Streaming/synthesis tuning for latency-critical first-audio chunks. */
+export type SynthesisOpts = {
+  /** Fish Audio latency mode — "balanced" trades a little prosody polish for faster synthesis. */
+  fishLatencyMode?: "normal" | "balanced";
+};
+
 export async function synthesizeStudentSpeech(
   text: string,
   personaName?: string,
   voiceOverride?: string,
   dialect?: string,
-  personaVoice?: PersonaVoice
+  personaVoice?: PersonaVoice,
+  opts?: SynthesisOpts
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   if (!text || !text.trim()) return null;
 
@@ -257,7 +266,7 @@ export async function synthesizeStudentSpeech(
   //    failure (402 credit, timeout, outage).
   if (!voiceOverride && process.env.FISH_AUDIO_API_KEY) {
     try {
-      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice);
+      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice, opts?.fishLatencyMode ?? "normal");
     } catch (e) {
       console.warn("Fish Audio synthesis error:", e);
     }

@@ -25,6 +25,10 @@ import {
 
 type StudentState = "attentive" | "hand_raised" | "distracted";
 
+// Low-latency streaming turn pipeline (NDJSON + sentence-chunked TTS).
+// Kill switch: set NEXT_PUBLIC_TURN_STREAM=0 to force the classic route.
+const STREAM_TURN_ENABLED = process.env.NEXT_PUBLIC_TURN_STREAM !== "0";
+
 type StudentUI = {
   personaId: string;
   name: string;
@@ -204,6 +208,22 @@ export function LiveRoom({
   const lastInterimResultTimeRef = useRef<number>(0);
   const lastSubmittedTeacherTextRef = useRef<string>("");
   const lastSubmittedTimeRef = useRef<number>(0);
+
+  // ---- STREAMING TURN PIPELINE (low latency) ----
+  // Final-result timestamp from the browser recognizer: a FINAL result is
+  // the recognizer's own endpointing decision — the utterance is settled.
+  const lastFinalResultAtRef = useRef<number>(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const streamDoneReceivedRef = useRef<boolean>(false);
+  const pendingDecodesRef = useRef<number>(0);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const nextStartTimeRef = useRef<number>(0);
+  const decodedDurationMsRef = useRef<number>(0);
+  const estimatedStudentMsRef = useRef<number>(0);
+  const playbackSettleRef = useRef<(() => void) | null>(null);
+  // Acoustic end of the teacher's speech (last VAD voice-activity tick) —
+  // the honest t=0 for time-to-first-audio measurement.
+  const vadSpeechEndAtRef = useRef<number>(0);
 
   useEffect(() => {
     isLiveOpenMicRef.current = isLiveOpenMic;
@@ -466,6 +486,9 @@ export function LiveRoom({
               let text = "";
               for (let i = 0; i < event.results.length; ++i) {
                 text += event.results[i][0].transcript + " ";
+                if (event.results[i].isFinal) {
+                  lastFinalResultAtRef.current = Date.now();
+                }
               }
               const combined = text.trim();
               if (combined) {
@@ -514,7 +537,10 @@ export function LiveRoom({
     isProcessingRef.current = true;
     setProcessing(true);
     setMeetingState("processing");
-    latencyDebugRef.current = { speechEndAt: Date.now() };
+    // t=0 for TTFA = the ACOUSTIC end of speech (last VAD voice tick), not
+    // the commit moment — so endpointing wait is honestly included.
+    latencyDebugRef.current = { speechEndAt: vadSpeechEndAtRef.current || Date.now() };
+    vadSpeechEndAtRef.current = 0;
 
     const speechDurationMs = customSpeechDurationMs ?? (Date.now() - recordStartRef.current);
     const blob = customBlob || (chunksRef.current.length > 0 ? new Blob(chunksRef.current, { type: "audio/webm" }) : null);
@@ -529,16 +555,6 @@ export function LiveRoom({
     }
 
     try {
-      let audioBase64 = "";
-      if (blob && blob.size > 0) {
-        audioBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = () => resolve("");
-          reader.readAsDataURL(blob);
-        });
-      }
-
       let teacherText = "";
 
       // 1. Primary STT: Use the exact live transcript accumulated by SpeechRecognition in the browser.
@@ -547,18 +563,19 @@ export function LiveRoom({
         teacherText = normalizeSpeechTranscription(clientFallbackTranscript.trim());
       }
 
-      // Diagnose teacher voice pitch and gender if audio blob is available
+      // Diagnose teacher voice pitch and gender in the BACKGROUND — it only
+      // feeds later turns' title inference and must never block dispatch
+      // (this used to sit ON the critical path before the turn request).
       if (blob && blob.size >= 500) {
         if (!detectedTeacherGenderRef.current && !isTeacherFemaleName && !isTeacherMaleName) {
-          try {
-            const detected = await detectVoiceGenderFromBlob(blob, audioContextRef.current);
-            if (detected) {
-              detectedTeacherGenderRef.current = detected;
-              console.log("[Audio] Teacher voice pitch diagnosed gender:", detected);
-            }
-          } catch (pitchErr) {
-            console.warn("Pitch detection failed:", pitchErr);
-          }
+          void detectVoiceGenderFromBlob(blob, audioContextRef.current)
+            .then((detected) => {
+              if (detected) {
+                detectedTeacherGenderRef.current = detected;
+                console.log("[Audio] Teacher voice pitch diagnosed gender:", detected);
+              }
+            })
+            .catch(() => {});
         }
 
         // 2. Server STT Fallback: ONLY call Whisper if client SpeechRecognition did not produce text!
@@ -627,17 +644,90 @@ export function LiveRoom({
 
       const currentExactElapsedMs = Math.max(0, Date.now() - startedAtMs);
 
-      const turnRes = await fetch(`/api/sessions/${sessionId}/turn`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          teacherText,
-          elapsedMs: currentExactElapsedMs,
-          speechDurationMs,
-          audioBase64,
-          voiceGender: detectedTeacherGenderRef.current,
-        }),
+      // STREAMING TURN PIPELINE (low latency): NDJSON events + sentence-
+      // chunked TTS start playback while the LLM is still generating.
+      // Any failure before first audio automatically falls back to the
+      // classic single-JSON route — sessions never break.
+      let handled = false;
+      if (STREAM_TURN_ENABLED) {
+        try {
+          await runStreamingTurn(teacherText, speechDurationMs, blob, currentExactElapsedMs);
+          handled = true;
+        } catch (streamErr: unknown) {
+          const aborted =
+            streamAbortRef.current?.signal.aborted === true ||
+            (streamErr instanceof Error && (streamErr.name === "AbortError" || streamErr.name === "TimeoutError"));
+          if (aborted) {
+            // Barge-in interrupt — the interrupt flow already handled
+            // playback teardown and user feedback.
+            handled = true;
+          } else {
+            console.warn("Streaming turn failed — falling back to the classic turn route:", streamErr);
+          }
+        }
+      }
+      if (!handled) {
+        await runLegacyTurn(teacherText, speechDurationMs, blob, currentExactElapsedMs);
+      }
+    } catch (err) {
+      console.error("Recording turn processing crashed:", err);
+      setMicError(
+        lang === "en"
+          ? "Network connection error. Please try speaking again."
+          : "حدث خطأ في الاتصال بالخادم. يُرجى المحاولة مرة أخرى."
+      );
+    } finally {
+      isProcessingRef.current = false;
+      setProcessing(false);
+      setIsTranscriptProcessing(false);
+      setLiveTranscriptPreview("");
+      setMeetingState(isLiveOpenMicRef.current && !isTeacherMutedRef.current ? "listening" : "idle");
+      if (isLiveOpenMicRef.current && !isTeacherMutedRef.current) {
+        setTimeout(() => {
+          restartSpeechRecognitionRef.current?.();
+          // Replay the utterance that arrived while this turn was processing
+          // — consecutive turns are never silently ignored.
+          const pending = pendingUtteranceRef.current;
+          pendingUtteranceRef.current = null;
+          if (pending && pending.trim().length >= 2) {
+            void handleRecordingComplete(undefined, 900, pending);
+          }
+        }, 150);
+      }
+    }
+  }
+
+  // =====================================================================
+  // LEGACY TURN — the original single-JSON route. Kept verbatim as the
+  // automatic fallback for the streaming pipeline.
+  // =====================================================================
+  async function runLegacyTurn(
+    teacherText: string,
+    speechDurationMs: number,
+    blob: Blob | null,
+    currentExactElapsedMs: number
+  ) {
+    let audioBase64 = "";
+    if (blob && blob.size > 0) {
+      audioBase64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => resolve("");
+        reader.readAsDataURL(blob);
       });
+    }
+
+    const turnRes = await fetch(`/api/sessions/${sessionId}/turn`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teacherText,
+        elapsedMs: currentExactElapsedMs,
+        speechDurationMs,
+        audioBase64,
+        voiceGender: detectedTeacherGenderRef.current,
+      }),
+    });
       const turnJson = await safeJson(turnRes);
       latencyDebugRef.current.turnAt = Date.now();
       if (!turnRes.ok) {
@@ -859,30 +949,364 @@ export function LiveRoom({
           "system"
         );
       }
-    } catch (err) {
-      console.error("Recording turn processing crashed:", err);
-      setMicError(
-        lang === "en"
-          ? "Network connection error. Please try speaking again."
-          : "حدث خطأ في الاتصال بالخادم. يُرجى المحاولة مرة أخرى."
+  }
+
+  // =====================================================================
+  // STREAMING TURN — NDJSON event consumer + gapless AudioContext chunk
+  // player.
+  //
+  // The server streams: meta (routing) → students (card states) → audio
+  // chunks (base64 MP3, scheduled for playback the instant they decode,
+  // while the LLM is still generating) → speech (full reply text) →
+  // persisted → done (per-stage latency metrics).
+  //
+  // Barge-in: the VAD watcher calls activeAudioFinishRef → every scheduled
+  // source stops instantly, the in-flight request aborts, and the room
+  // returns to LISTENING.
+  // =====================================================================
+  async function runStreamingTurn(
+    teacherText: string,
+    speechDurationMs: number,
+    blob: Blob | null,
+    currentExactElapsedMs: number
+  ): Promise<void> {
+    const ac = new AbortController();
+    streamAbortRef.current = ac;
+    streamDoneReceivedRef.current = false;
+    pendingDecodesRef.current = 0;
+    activeSourcesRef.current = [];
+    nextStartTimeRef.current = 0;
+    decodedDurationMsRef.current = 0;
+    estimatedStudentMsRef.current = 0;
+
+    const L = latencyDebugRef.current;
+    let firstAudioHandled = false;
+    let currentSpeechPersonaId: string | null = null;
+    let sawStudentSpeech = false;
+    let wasDeduplicated = false;
+    let sawWarn = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let doneLatency: Record<string, any> | null = null;
+    let routedInfo: { targetName?: string | null; explicitlyAddressed?: boolean } | null = null;
+
+    const res = await fetch(`/api/sessions/${sessionId}/turn/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teacherText,
+        elapsedMs: currentExactElapsedMs,
+        speechDurationMs,
+        voiceGender: detectedTeacherGenderRef.current,
+      }),
+      signal: ac.signal,
+    });
+    latencyDebugRef.current.turnAt = Date.now();
+
+    if (!res.ok) {
+      const errJson = await safeJson(res).catch(() => ({}) as Record<string, unknown>);
+      throw new Error(String((errJson as { error?: string }).error || `stream ${res.status}`));
+    }
+    const ctype = res.headers.get("content-type") || "";
+    if (!ctype.includes("x-ndjson")) {
+      throw new Error(`unexpected stream content-type: ${ctype}`);
+    }
+
+    setMeetingState("responding");
+    setTeacherTalkMs((prev) => prev + speechDurationMs);
+
+    const settle = () => {
+      const fn = playbackSettleRef.current;
+      playbackSettleRef.current = null;
+      fn?.();
+    };
+    const checkSettle = () => {
+      if (
+        streamDoneReceivedRef.current &&
+        pendingDecodesRef.current === 0 &&
+        activeSourcesRef.current.length === 0
+      ) {
+        settle();
+      }
+    };
+
+    const interruptStreamPlayback = () => {
+      for (const s of activeSourcesRef.current) {
+        try {
+          s.onended = null;
+          s.stop();
+        } catch {}
+      }
+      activeSourcesRef.current = [];
+      pendingDecodesRef.current = 0;
+      nextStartTimeRef.current = 0;
+      setSpeakingPersonaId(null);
+      speakingPersonaIdRef.current = null;
+      setActiveSpeakingAudio(null);
+      activeAudioFinishRef.current = null;
+      playbackStartedAtRef.current = 0;
+      addEvent(
+        isRtl ? "تمت مقاطعة الطالب — يستمع الفصل إليك الآن." : "Student interrupted — the class is listening to you.",
+        "system"
       );
-    } finally {
-      isProcessingRef.current = false;
-      setProcessing(false);
-      setIsTranscriptProcessing(false);
-      setLiveTranscriptPreview("");
-      setMeetingState(isLiveOpenMicRef.current && !isTeacherMutedRef.current ? "listening" : "idle");
-      if (isLiveOpenMicRef.current && !isTeacherMutedRef.current) {
-        setTimeout(() => {
-          restartSpeechRecognitionRef.current?.();
-          // Replay the utterance that arrived while this turn was processing
-          // — consecutive turns are never silently ignored.
-          const pending = pendingUtteranceRef.current;
-          pendingUtteranceRef.current = null;
-          if (pending && pending.trim().length >= 2) {
-            void handleRecordingComplete(undefined, 900, pending);
+      try {
+        ac.abort();
+      } catch {}
+      settle();
+    };
+
+    const scheduleChunk = (buf: AudioBuffer, personaId: string) => {
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      // Natural breath gap between different speakers (turn-taking).
+      const speakerGap = currentSpeechPersonaId && currentSpeechPersonaId !== personaId ? 0.2 : 0;
+      currentSpeechPersonaId = personaId;
+      const startAt = Math.max(ctx.currentTime + 0.02, nextStartTimeRef.current + speakerGap);
+      nextStartTimeRef.current = startAt + buf.duration + 0.05;
+      src.onended = () => {
+        activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== src);
+        checkSettle();
+      };
+      activeSourcesRef.current.push(src);
+      try {
+        src.start(startAt);
+      } catch {}
+    };
+
+    const handleAudioEvent = async (ev: { personaId: string; name?: string; b64: string }) => {
+      const ctx = audioContextRef.current;
+      if (!ctx || !ev.b64) return;
+      pendingDecodesRef.current += 1;
+      try {
+        const bin = atob(ev.b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const buf = await ctx.decodeAudioData(bytes.buffer);
+        decodedDurationMsRef.current += buf.duration * 1000;
+        if (!firstAudioHandled) {
+          firstAudioHandled = true;
+          setSpeakingPersonaId(ev.personaId);
+          speakingPersonaIdRef.current = ev.personaId;
+          setMeetingState("speaking");
+          playbackStartedAtRef.current = Date.now();
+          bargeInVoiceSinceRef.current = null;
+          activeAudioFinishRef.current = () => interruptStreamPlayback();
+          if (L && !L.firstAudioAt) {
+            L.firstAudioAt = Date.now();
+            if (process.env.NEXT_PUBLIC_DEBUG_LATENCY === "1") {
+              console.debug(
+                `[Latency] speechEnd→transcript ${(L.transcriptAt ?? 0) - (L.speechEndAt ?? 0)}ms | ` +
+                  `transcript→dispatch ${(L.turnAt ?? 0) - (L.transcriptAt ?? 0)}ms | ` +
+                  `dispatch→firstAudio ${L.firstAudioAt - (L.turnAt ?? 0)}ms | ` +
+                  `total ${L.firstAudioAt - (L.speechEndAt ?? 0)}ms`
+              );
+            }
           }
-        }, 150);
+        }
+        scheduleChunk(buf, ev.personaId);
+      } catch (decodeErr) {
+        console.warn("Audio chunk decode failed:", decodeErr);
+      } finally {
+        pendingDecodesRef.current -= 1;
+        checkSettle();
+      }
+    };
+
+    const attachTeacherAudio = (teacherEventId: string | null) => {
+      if (!blob || blob.size === 0) return;
+      const fileReader = new FileReader();
+      fileReader.onloadend = () => {
+        const dataUrl = fileReader.result;
+        if (typeof dataUrl === "string" && dataUrl.startsWith("data:audio")) {
+          fetch(`/api/sessions/${sessionId}/turn/audio`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ audioBase64: dataUrl, teacherEventId }),
+            keepalive: true,
+          }).catch(() => {});
+        }
+      };
+      fileReader.onerror = () => {};
+      fileReader.readAsDataURL(blob);
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const processEvent = (ev: any) => {
+      if (!ev || typeof ev.type !== "string") return;
+      switch (ev.type) {
+        case "meta": {
+          routedInfo = ev.routing ?? null;
+          if (ev.routing?.explicitlyAddressed && ev.routing?.targetName) {
+            addEvent(
+              isRtl ? `توجيه السؤال إلى: ${ev.routing.targetName}` : `Routed to: ${ev.routing.targetName}`,
+              "system"
+            );
+          }
+          break;
+        }
+        case "students": {
+          for (const s of ev.students ?? []) {
+            setStudents((prev) => {
+              const next = prev.map((st) =>
+                st.personaId === s.personaId
+                  ? {
+                      ...st,
+                      state: s.state as StudentState,
+                      attention: s.attention as number,
+                      physicalAction: s.physicalAction as string | undefined,
+                      actionDescriptionAr: s.actionDescriptionAr as string | undefined,
+                    }
+                  : st
+              );
+              studentsRef.current = next;
+              return next;
+            });
+          }
+          break;
+        }
+        case "speech": {
+          const sp = ev.speech;
+          if (!sp?.fullText) break;
+          sawStudentSpeech = true;
+          addEvent(String(sp.fullText), "student", String(sp.name));
+          setRespondedPersonaIds((prev) => new Set(prev).add(String(sp.personaId)));
+          setStudentTurnCounts((prev) => ({
+            ...prev,
+            [String(sp.personaId)]: (prev[String(sp.personaId)] ?? 0) + 1,
+          }));
+          const words = String(sp.fullText).trim().split(/\s+/).length;
+          const estimatedMs = Math.max(1500, words * 380);
+          estimatedStudentMsRef.current += estimatedMs;
+          setStudentTalkMs((prev) => prev + estimatedMs);
+          break;
+        }
+        case "audio": {
+          void handleAudioEvent(ev.audio);
+          break;
+        }
+        case "persisted": {
+          attachTeacherAudio(ev.persisted?.teacherEventId ?? null);
+          break;
+        }
+        case "done": {
+          doneLatency = ev.done?.latency ?? null;
+          const qt = ev.done?.questionType;
+          if (qt === "open" || qt === "closed") {
+            setQuestionCounts((prev) =>
+              qt === "open" ? { ...prev, open: prev.open + 1 } : { ...prev, closed: prev.closed + 1 }
+            );
+          }
+          streamDoneReceivedRef.current = true;
+          checkSettle();
+          break;
+        }
+        case "deduplicated": {
+          wasDeduplicated = true;
+          streamDoneReceivedRef.current = true;
+          break;
+        }
+        case "warn": {
+          sawWarn = true;
+          addEvent(
+            String(ev.warn?.error || "تعذّر تشغيل الصوت. يُرجى المحاولة مرة أخرى."),
+            "system"
+          );
+          break;
+        }
+        case "error": {
+          const msg = String(ev.error?.error || (lang === "en" ? "Turn processing error" : "حدث خطأ مؤقت أثناء معالجة الرد"));
+          if (!firstAudioHandled) {
+            throw new Error(msg);
+          }
+          setMicError(msg);
+          break;
+        }
+      }
+    };
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let lineBuf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuf += decoder.decode(value, { stream: true });
+      let nl = lineBuf.indexOf("\n");
+      while (nl >= 0) {
+        const line = lineBuf.slice(0, nl).trim();
+        lineBuf = lineBuf.slice(nl + 1);
+        if (line) {
+          try {
+            processEvent(JSON.parse(line));
+          } catch {}
+        }
+        nl = lineBuf.indexOf("\n");
+      }
+    }
+    if (lineBuf.trim()) {
+      try {
+        processEvent(JSON.parse(lineBuf.trim()));
+      } catch {}
+    }
+
+    // Wait for every scheduled chunk to finish playing (or a barge-in
+    // interrupt to settle us early). A safety cap guards against a lost
+    // onended event.
+    await new Promise<void>((resolve) => {
+      playbackSettleRef.current = resolve;
+      checkSettle();
+      setTimeout(() => {
+        if (playbackSettleRef.current === resolve) {
+          playbackSettleRef.current = null;
+          resolve();
+        }
+      }, 120_000);
+    });
+
+    // Playback fully drained — clear the speaking state and correct the
+    // talk-time estimate with the REAL decoded audio duration.
+    setSpeakingPersonaId(null);
+    speakingPersonaIdRef.current = null;
+    setActiveSpeakingAudio(null);
+    activeAudioFinishRef.current = null;
+    playbackStartedAtRef.current = 0;
+    if (estimatedStudentMsRef.current > 0) {
+      setStudentTalkMs((prev) => prev - estimatedStudentMsRef.current + Math.round(decodedDurationMsRef.current));
+    }
+
+    // NO SILENT TURNS: mirror the classic path's explicit feedback when
+    // the classroom decision engine kept everyone quiet.
+    if (!sawStudentSpeech && !firstAudioHandled && !sawWarn && !wasDeduplicated) {
+      addEvent(
+        isRtl ? "أنصت الطلاب إلى كلامك بهدوء." : "The students listened attentively.",
+        "system"
+      );
+    }
+
+    // HARD LATENCY INSTRUMENTATION — one record per turn, always kept
+    // in memory (window.__fitnaLatency) for developers and the acceptance
+    // harness; printed to console only in debug mode.
+    if (typeof window !== "undefined") {
+      const w = window as unknown as { __fitnaLatency?: Record<string, unknown>[] };
+      w.__fitnaLatency = w.__fitnaLatency ?? [];
+      w.__fitnaLatency.push({
+        at: new Date().toISOString(),
+        stream: true,
+        speechEndAt: L?.speechEndAt,
+        transcriptAt: L?.transcriptAt,
+        dispatchAt: L?.turnAt,
+        firstAudioAt: L?.firstAudioAt,
+        ttfaClientMs: L?.speechEndAt && L?.firstAudioAt ? L.firstAudioAt - L.speechEndAt : undefined,
+        server: doneLatency ?? undefined,
+        routing: routedInfo ?? undefined,
+        audio: firstAudioHandled,
+        decodedAudioMs: Math.round(decodedDurationMsRef.current),
+        text: teacherText,
+      });
+      if (process.env.NEXT_PUBLIC_DEBUG_LATENCY === "1") {
+        console.debug("[Latency] turn recorded", w.__fitnaLatency[w.__fitnaLatency.length - 1]);
       }
     }
   }
@@ -950,6 +1374,11 @@ export function LiveRoom({
           const res = event.results[i];
           if (res.isFinal) {
             fullAccumulated += res[0].transcript + " ";
+            // A FINAL result is the recognizer's own endpointing decision —
+            // timestamp it so the VAD can commit the turn immediately
+            // (latency: waiting 1.2-2.2s of dead air was the single
+            // biggest time-to-first-audio cost).
+            lastFinalResultAtRef.current = Date.now();
           } else {
             interim += res[0].transcript;
           }
@@ -1094,13 +1523,25 @@ export function LiveRoom({
     restartSpeechRecognitionRef.current = restartSpeechRecognition;
   }, [restartSpeechRecognition]);
 
+  // LATENCY: warm the turn function the moment the room opens — absorbs
+  // the serverless cold start, the Prisma/Neon connection AND the Fish/
+  // Groq TLS handshakes BEFORE the teacher ever finishes a sentence.
+  useEffect(() => {
+    fetch(`/api/sessions/${sessionId}/turn/stream`, { method: "GET" }).catch(() => {});
+  }, [sessionId]);
+
   const commitOpenMicTurn = useCallback(() => {
+    // Record the acoustic speech end BEFORE committing (t=0 for TTFA).
+    if (lastSpeechTimeRef.current) {
+      vadSpeechEndAtRef.current = lastSpeechTimeRef.current;
+    }
     // Abort active speech recognition to flush browser internal result buffers immediately
     if (speechRecognitionRef.current) {
       try {
         speechRecognitionRef.current.abort();
       } catch {}
     }
+    lastFinalResultAtRef.current = 0;
     const directTranscript = nativeTranscriptAccumulatorRef.current.trim();
     nativeTranscriptAccumulatorRef.current = "";
 
@@ -1375,11 +1816,25 @@ export function LiveRoom({
                 `(?:[؟?]|ليه|إيه|ايه|إزاي|ازاي|مين|هل|متى|أين|اين|كام|كم|فين|يا\s*(?:${rosterNames || "طلاب|شباب|جماعة"}|ولاد|شباب|جماعة|شطار)|جاوب|قول|شاركونا|شاركينا|تفضلي|اتفضلي|اتفضل|تفضل)\b`,
                 "i"
               ).test(currentAccText);
-            const effectiveSilenceMs = isQuestionOrCall ? 1200 : hasAccumulatedText ? 2000 : 2200;
+            // LATENCY (endpointing): commit as soon as the recognizer has
+            // emitted a FINAL result and the mic went quiet — Google's own
+            // endpointing already settled the utterance. Without a final,
+            // use the reduced silence thresholds (was 1.2–2.2s + a 1.5s
+            // recognition-active guard).
+            const finalSeen = lastFinalResultAtRef.current > 0;
+            const effectiveSilenceMs = finalSeen
+              ? isQuestionOrCall
+                ? 380
+                : 550
+              : isQuestionOrCall
+              ? 700
+              : hasAccumulatedText
+              ? 800
+              : 1000;
             const minSpeechMs = hasAccumulatedText ? 200 : 350;
 
             const timeSinceInterim = now - (lastInterimResultTimeRef.current || 0);
-            const isBrowserSpeechActive = timeSinceInterim < 1500;
+            const isBrowserSpeechActive = !finalSeen && timeSinceInterim < 1200;
 
             if (silenceDuration > effectiveSilenceMs && !isBrowserSpeechActive) {
               speechDetectedRef.current = false;
