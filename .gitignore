@@ -51,3 +51,4 @@ mini-services/
 examples/
 
 # keep: src/ prisma/ public/ scripts/ *.config.* package.json bun.lock README.md .env.example
+.vercel
