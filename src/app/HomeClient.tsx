@@ -21,7 +21,7 @@ const copy = {
     desc: "تدرّب بصوتك الطبيعي داخل فصل افتراضي حيّ، وتعلّم كيف تتعامل مع التشتت والفروق الفردية قبل أن تصبح واقعاً.",
     primary: "جرّب المحاكاة الآن",
     secondary: "شاهد كيف تعمل",
-    mainSlogan: "قبل ما تدخل الفصل... خليك فِطِن.",
+    mainSlogan: "قبل أن تدخل الفصل... كُن فَطِنًا.",
     secondarySlogan: "Where Pedagogical Mastery Meets Agentic Intelligence.",
     trust: ["+500 معلم", "لهجة مصرية عامية", "أطر Danielson & CLASS"],
     problemTitle: "التدريب الميداني وحده لا يكفي",

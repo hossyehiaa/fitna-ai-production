@@ -32,7 +32,7 @@ export default async function InstitutionDashboardPage() {
           <p className="text-xs text-[#071B3A]/60 dark:text-white/60">
             {lang === "en"
               ? "Your account is not linked to an institution yet. Please contact support."
-              : "حسابك لسه مش مربوط بمؤسسة. تواصل مع الدعم لربط حسابك."}
+              : "حسابك غير مرتبط بمؤسسة بعد. يُرجى التواصل مع الدعم لربط حسابك."}
           </p>
         </div>
       </div>

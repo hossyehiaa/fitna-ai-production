@@ -52,7 +52,7 @@ export default async function SessionSetupPage() {
   const personasRes = await withTimeout(
     db
       .from("student_personas")
-      .select("id, name, age, base_attention, strengths, weaknesses, dialect")
+      .select("id, name, age, base_attention, strengths, weaknesses, dialect, avatar_key, gender, nationality")
       .eq("is_active", true)
       .order("created_at", { ascending: true }),
     10000,

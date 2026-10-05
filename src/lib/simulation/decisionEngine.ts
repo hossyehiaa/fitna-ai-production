@@ -31,6 +31,9 @@ export interface TeacherAnalysisContext {
   lastHandRaiseIntent?: Record<string, string>;
   resolvedUnknownNames?: string[];
   lockedTeacherTitle?: string | null;
+  /** Actual classroom participant names (routing uses persistent characters —
+   *  Egyptian AND Saudi classes alike; never a hardcoded name list). */
+  participantNames?: string[];
 }
 
 export interface TeacherAnalysis {
@@ -180,9 +183,16 @@ function _analyzeTeacherIntentInternal(
 
   // 3b0. Teacher Slip of the Tongue / Apology ("معلش اتلخبطت في الاسم", "أقصد سارة", "سوري اتلخبطت", "معلش يا سارة غلطت في الاسم")
   const isTeacherApology =
-    /(?:معلش|سوري|عفوا[ً]?)\s*(?:يا\s*(?:عمر|سار[ةه]|ياسين|نور))?.*?(?:اتلخبطت|لخبطت|غلطت|مكانش\s*قصدي|مكنش\s*قصدي|اقصد|أقصد)|(?:اتلخبطت|لخبطت|غلطت)\s*في\s*(?:الاسم|اسمك)|(?:اقصد|أقصد)\s*(?:يا\s*)?(?:عمر|سار[ةه]|ياسين|نور)/i.test(clean);
+    /(?:معلش|سوري|عفوا[ً]?)\s*(?:يا\s*[\u0621-\u064A]+)?\s*.*?(?:اتلخبطت|لخبطت|غلطت|مكانش\s*قصدي|مكنش\s*قصدي|اقصد|أقصد)|(?:اتلخبطت|لخبطت|غلطت)\s*في\s*(?:الاسم|اسمك)|(?:اقصد|أقصد)\s*(?:يا\s*)?[\u0621-\u064A]+/i.test(clean);
 
-  const candidateNames = ["عمر", "سارة", "ياسين", "نور"];
+  // Routing name bank: the ACTUAL participants in this classroom (Egyptian
+  // four, Saudi four, or any future set) — provided by the caller from the
+  // persisted persona records. Falls back to the original Egyptian four
+  // only for legacy callers that pass no participants.
+  const candidateNames =
+    context?.participantNames && context.participantNames.length > 0
+      ? context.participantNames
+      : ["عمر", "سارة", "ياسين", "نور"];
 
   if (isTeacherApology) {
     const matchedStudent = candidateNames.find((n) =>
@@ -1154,15 +1164,25 @@ export function decideClassroomReaction(
   // 11. Praise ("برافو يا سارة") -> Targeted student says brief thanks, or 0 speakers if general
   if (analysis.intent === "praise") {
     const target = analysis.targetStudentName ? students.find((s) => s.name === analysis.targetStudentName) : null;
+    // NO SILENT TURNS: general praise ("أحسنتم جميعاً") gets a brief
+    // acknowledgement from the CURRENT speaker (or the most attentive
+    // student) — the teacher always sees that the class reacted.
+    const ackTarget =
+      target ||
+      students.find((s) => s.personaId === lastSpeakingPersonaId) ||
+      [...students].sort((a, b) => b.attention - a.attention)[0] ||
+      null;
     for (const student of students) {
       const copy = { ...student, physicalAction: "attentive" as StudentPhysicalAction };
       copy.actionDescriptionAr = getActionDescription("attentive", copy.name);
-      if (target && copy.personaId === target.personaId) {
+      if (ackTarget && copy.personaId === ackTarget.personaId) {
         candidateSpeakers.push({
           personaId: copy.personaId,
           name: copy.name,
           shouldSpeak: true,
-          reasonToSpeak: "شكر المعلم على التشجيع والمدح",
+          reasonToSpeak: target
+            ? "شكر المعلم على التشجيع والمدح"
+            : "شكر المعلم نيابةً عن الفصل على تشجيع الجميع (رد قصير ومهذب)",
           spokenEmotion: "excited",
         });
       }

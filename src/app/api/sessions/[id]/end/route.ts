@@ -22,7 +22,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return await handleEnd(request, params);
   } catch (err) {
     console.error("Ending session failed:", err);
-    return NextResponse.json({ error: "حصل خطأ أثناء إنهاء الجلسة. جرب تاني." }, { status: 500 });
+    return NextResponse.json({ error: "حدث خطأ أثناء إنهاء الجلسة. يُرجى المحاولة مرة أخرى." }, { status: 500 });
   }
 }
 
@@ -47,10 +47,10 @@ async function handleEnd(request: NextRequest, params: Promise<{ id: string }>) 
     .single();
 
   if (!session || session.teacher_id !== user.id) {
-    return NextResponse.json({ error: "الجلسة دي مش بتاعتك" }, { status: 403 });
+    return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
   }
   if (session.status !== "in_progress") {
-    return NextResponse.json({ error: "الجلسة دي مخلّصة بالفعل" }, { status: 400 });
+    return NextResponse.json({ error: "انتهت هذه الجلسة بالفعل" }, { status: 400 });
   }
 
   const { data: events } = await supabase
@@ -98,7 +98,7 @@ async function handleEnd(request: NextRequest, params: Promise<{ id: string }>) 
 
   if (updateError) {
     console.error("Failed to finalize session:", updateError);
-    return NextResponse.json({ error: "حصل خطأ أثناء إنهاء الجلسة" }, { status: 500 });
+    return NextResponse.json({ error: "حدث خطأ أثناء إنهاء الجلسة" }, { status: 500 });
   }
 
   // Badge unlock checks (spec Stage 3 / FR-46): real code-defined conditions

@@ -3,8 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import { classifyTeacherUtterance, generateStudentReactions, generateFallbackReactions } from "@/lib/ai/turn";
 import type { StudentPhysicalAction } from "@/lib/simulation/classroomState";
 import { normalizeSpeechTranscription } from "@/lib/audio/speechNormalizer";
-import { synthesizeStudentSpeech } from "@/app/api/tts/route";
+import { synthesizeStudentSpeech, type PersonaVoice } from "@/app/api/tts/route";
 import { parseDialect } from "@/lib/ai/dialects";
+import { resolveTargetCharacter, explicitTargetFromUtterance } from "@/lib/ai/speakerRouting";
 
 export const runtime = "nodejs";
 
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     console.error("Turn processing failed:", err);
     return NextResponse.json(
       {
-        error: "حصل خطأ أثناء معالجة الكلام. جرب تاني.",
+        error: "حدث خطأ مؤقت أثناء معالجة الرد. يُرجى المحاولة مرة أخرى.",
         // Included to make local debugging possible without digging
         // through server logs. Remove this field before any real
         // deployment with outside users — it can leak internal detail.
@@ -40,6 +41,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 }
 
 async function handleTurn(request: NextRequest, params: Promise<{ id: string }>) {
+  const t0 = Date.now();
   const { id: sessionId } = await params;
   const supabase = await createClient();
   const {
@@ -54,10 +56,10 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
     .single();
 
   if (!session || session.teacher_id !== user.id) {
-    return NextResponse.json({ error: "الجلسة دي مش بتاعتك" }, { status: 403 });
+    return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
   }
   if (session.status !== "in_progress") {
-    return NextResponse.json({ error: "الجلسة دي مخلّصة بالفعل" }, { status: 400 });
+    return NextResponse.json({ error: "انتهت هذه الجلسة بالفعل" }, { status: 400 });
   }
 
   const { data: teacherProfile } = await supabase
@@ -80,7 +82,7 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
   const sessionDialect = parseDialect((session as { dialect?: string } | null)?.dialect);
 
   if (!inputTeacherText?.trim()) {
-    return NextResponse.json({ error: "مفيش نص اتقال" }, { status: 400 });
+    return NextResponse.json({ error: "لم يتم التقاط أي كلام" }, { status: 400 });
   }
 
   const teacherText = normalizeSpeechTranscription(inputTeacherText.trim());
@@ -93,7 +95,10 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
 
   const personaIds = (sessionStudents ?? []).map((s) => s.persona_id);
   const { data: personas } = personaIds.length
-    ? await supabase.from("student_personas").select("*").in("id", personaIds)
+    ? await supabase
+        .from("student_personas")
+        .select("*")
+        .in("id", personaIds)
     : { data: [] };
 
   const currentAttention: Record<string, number> = {};
@@ -292,6 +297,27 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
     }
   }
 
+  // ---------------------------------------------------------------------
+  // SPEAKER ROUTING: resolve the intended recipient from the transcript
+  // using the PERSISTENT character identities (persona ids + names).
+  // Explicit vocative ("يا سلطان") → ONLY that character responds.
+  // ---------------------------------------------------------------------
+  const routingParticipants = (personas ?? []).map((p) => ({
+    personaId: p.id as string,
+    name: p.name as string,
+    characterKey: (p as { character_key?: string | null }).character_key ?? null,
+    gender: (p as { gender?: string }).gender,
+    hasHandRaised: studentsWithHandRaised.includes(p.name),
+    timesSpoken: timesSpoken[p.id] ?? 0,
+    attention: currentAttention[p.id] ?? (p as { base_attention?: number }).base_attention ?? 70,
+  }));
+  const routing = resolveTargetCharacter(teacherText, routingParticipants, {
+    lastSpeakingPersonaId,
+    recentSpeakerPersonaIds,
+  });
+  const explicitTarget = explicitTargetFromUtterance(teacherText, routingParticipants);
+  const participantNames = routingParticipants.map((p) => p.name);
+
   // 1. Concurrent LLM Execution: Classify teacher question and generate student reaction in parallel!
   const questionTypePromise = classifyTeacherUtterance(teacherText).catch((err) => {
     console.error("classifyTeacherUtterance failed, defaulting to 'statement':", err);
@@ -323,10 +349,12 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
         resolvedUnknownNames,
         teacherFullName,
         dialect: sessionDialect,
+        participantNames,
       }).catch((err) => {
         console.error("generateStudentReactions failed, using safe fallback:", err);
         return generateFallbackReactions({
           personas,
+          participantNames,
           teacherUtterance: teacherText,
           recentHistory,
           turnIndex,
@@ -349,19 +377,31 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
       })
     : Promise.resolve([]);
 
+  const llmStartedAt = Date.now();
   const [questionType, reactions] = await Promise.all([questionTypePromise, studentReactionsPromise]);
+  const llmDoneAt = Date.now();
 
-  // 2. Pre-synthesize TTS audio concurrently on the server for the speaking student!
+  // 2. Pre-synthesize TTS audio concurrently on the server for the speaking
+  // student — with the character's OWN voice identity from its persisted
+  // profile (voice_id = Fish reference, edge_voice = fallback neural voice).
   const speakingStudent = reactions.find((r) => r.responded && r.text);
   const speakingPersona = speakingStudent
     ? personas?.find((p) => p.id === speakingStudent.personaId)
+    : undefined;
+  const personaVoice: PersonaVoice | undefined = speakingPersona
+    ? {
+        fishVoiceId: (speakingPersona as { voice_id?: string | null }).voice_id ?? null,
+        edgeVoice: (speakingPersona as { edge_voice?: string | null }).edge_voice ?? null,
+        gender: (speakingPersona as { gender?: string }).gender ?? null,
+      }
     : undefined;
   const ttsPromise = speakingStudent && speakingStudent.text
     ? synthesizeStudentSpeech(
         speakingStudent.text,
         speakingStudent.name,
         undefined,
-        speakingPersona?.dialect ?? sessionDialect
+        speakingPersona?.dialect ?? sessionDialect,
+        personaVoice
       ).catch((err) => {
         console.warn("Pre-synthesis TTS error:", err);
         return null;
@@ -491,6 +531,7 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
   ]);
 
   const [, ttsAudio] = await Promise.all([dbPromise, ttsPromise]);
+  const ttsDoneAt = Date.now();
 
   // Embed pre-synthesized audio directly so client plays audio with 0ms round-trip delay!
   if (speakingStudent && ttsAudio) {
@@ -500,7 +541,44 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
     }
   }
 
-  return NextResponse.json({ questionType, students: updatedStudents });
+  // SPEAKER ROUTING ENFORCEMENT: when the teacher explicitly addressed one
+  // character ("يا سلطان"), ONLY that character may carry a spoken reply.
+  // Other students keep their state updates but never speak over the target.
+  if (explicitTarget) {
+    for (const st of updatedStudents) {
+      if (st.personaId !== explicitTarget.personaId && st.text) {
+        st.text = null;
+      }
+    }
+  }
+
+  // Per-stage latency (developer/debug mode only — never shown to users).
+  const tEnd = Date.now();
+  const latency = {
+    routingMs: t0 === tEnd ? 0 : undefined, // resolved before LLM; see debug log
+    llmMs: llmDoneAt - llmStartedAt,
+    ttsMs: ttsDoneAt - llmDoneAt,
+    totalMs: tEnd - t0,
+  };
+  if (process.env.DEBUG_LATENCY === "1" || process.env.NODE_ENV !== "production") {
+    console.debug(
+      `[Turn:${sessionId.slice(0, 8)}] routing=${routing.reason} target=${routing.targetName ?? "-"} ` +
+        `explicit=${explicitTarget ? explicitTarget.name : "no"} llm=${latency.llmMs}ms tts=${latency.ttsMs}ms total=${latency.totalMs}ms`
+    );
+  }
+
+  return NextResponse.json({
+    questionType,
+    students: updatedStudents,
+    routing: {
+      reason: routing.reason,
+      targetPersonaId: explicitTarget ? explicitTarget.personaId : routing.targetPersonaId,
+      targetCharacterKey: explicitTarget ? explicitTarget.characterKey : routing.targetCharacterKey,
+      targetName: explicitTarget ? explicitTarget.name : routing.targetName,
+      explicitlyAddressed: Boolean(explicitTarget),
+    },
+    ...(process.env.DEBUG_LATENCY === "1" ? { latency } : {}),
+  });
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -508,7 +586,7 @@ function clamp(n: number, min: number, max: number) {
 }
 
 function stateLabel(state: string) {
-  if (state === "hand_raised") return "رفع إيده";
-  if (state === "distracted") return "اتشتت";
+  if (state === "hand_raised") return "رفع يده";
+  if (state === "distracted") return "تشتّت";
   return "منتبه";
 }

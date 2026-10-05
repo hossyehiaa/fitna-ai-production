@@ -17,10 +17,10 @@ export function RegenerateReportButton({ sessionId }: { sessionId: string }) {
         router.refresh();
       } else {
         const json = await res.json().catch(() => ({}));
-        setError(json.error || "حصل خطأ أثناء توليد التقرير");
+        setError(json.error || "حدث خطأ أثناء توليد التقرير");
       }
     } catch {
-      setError("حصل خطأ في الاتصال");
+      setError("حدث خطأ في الاتصال");
     } finally {
       setLoading(false);
     }
@@ -29,7 +29,7 @@ export function RegenerateReportButton({ sessionId }: { sessionId: string }) {
   return (
     <div className="bg-white rounded-2xl p-6 text-center space-y-3">
       <p className="text-sm text-[#071B3A]/60">
-        التحليل النصي للجلسة دي لسه مش متولّد (ممكن يكون حصل خطأ مؤقت وقت إنهاء الجلسة).
+        التحليل النصي لهذه الجلسة لم يُولَّد بعد (ربما حدث خطأ مؤقت عند إنهاء الجلسة).
       </p>
       {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
       <button
@@ -37,7 +37,7 @@ export function RegenerateReportButton({ sessionId }: { sessionId: string }) {
         disabled={loading}
         className="bg-yellow-400 hover:bg-yellow-500 disabled:opacity-60 text-[#071B3A] font-semibold rounded-lg px-5 py-2.5"
       >
-        {loading ? "جاري التوليد..." : "ولّد التحليل دلوقتي"}
+        {loading ? "جارٍ التوليد..." : "توليد التحليل الآن"}
       </button>
     </div>
   );

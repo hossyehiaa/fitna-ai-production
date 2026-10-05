@@ -20,7 +20,7 @@ export async function signInAction(
     const password = String(formData.get("password") || "");
 
     if (!validateEmail(email)) return { error: "البريد الإلكتروني غير صالح" };
-    if (password.length < 6) return { error: "كلمة المرور لازم تكون 6 أحرف على الأقل" };
+    if (password.length < 6) return { error: "يجب أن تتكون كلمة المرور من 6 أحرف على الأقل" };
 
     const cookieStore = await cookies();
     cookieStore.delete("fitna_demo");
@@ -89,12 +89,20 @@ export async function signUpAction(
     const password = String(formData.get("password") || "");
     const fullName = String(formData.get("full_name") || "").trim();
     const role = String(formData.get("role") || "teacher");
+    // Account identity: explicit type + nationality selection (stored,
+    // never inferred from locale/IP/device).
+    const accountTypeRaw = String(formData.get("account_type") || "teacher");
+    const countryRaw = String(formData.get("country") || "EG");
+    const accountType = ["individual", "organization", "teacher"].includes(accountTypeRaw)
+      ? accountTypeRaw
+      : "teacher";
+    const country = countryRaw === "SA" ? "SA" : "EG";
 
     if (!validateEmail(email)) return { error: "البريد الإلكتروني غير صالح" };
-    if (password.length < 6) return { error: "كلمة المرور لازم تكون 6 أحرف على الأقل" };
-    if (!fullName) return { error: "من فضلك اكتب اسمك" };
+    if (password.length < 6) return { error: "يجب أن تتكون كلمة المرور من 6 أحرف على الأقل" };
+    if (!fullName) return { error: "يُرجى كتابة اسمك" };
     if (role !== "teacher" && role !== "institution_admin") {
-      return { error: "من فضلك اختر كيف ستستخدم فِطنة" };
+      return { error: "يُرجى اختيار نوع الحساب" };
     }
 
     const supabase = await createClient();
@@ -124,6 +132,8 @@ export async function signUpAction(
           email,
           full_name: fullName,
           role,
+          account_type: accountType,
+          country,
         }, { onConflict: "id" });
       }
     } catch {

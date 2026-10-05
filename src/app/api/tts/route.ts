@@ -9,8 +9,16 @@ import {
   type Dialect,
 } from "@/lib/ai/dialects";
 import { getCurrentUser } from "@/lib/auth/session";
+import { resolveCharacter } from "@/lib/characters/registry";
 
 export const runtime = "nodejs";
+
+/** Per-character voice identity resolved from the DB persona profile. */
+export interface PersonaVoice {
+  fishVoiceId?: string | null;
+  edgeVoice?: string | null;
+  gender?: string | null;
+}
 
 export type StudentVoiceProfile = {
   voice: string;
@@ -84,10 +92,17 @@ const DEFAULT_SAUDI_MALE: StudentVoiceProfile = {
 function resolveVoiceProfile(
   personaName?: string,
   voiceOverride?: string,
-  dialect: Dialect = "egyptian"
+  dialect: Dialect = "egyptian",
+  personaVoice?: PersonaVoice
 ): StudentVoiceProfile {
   if (voiceOverride) {
     return { voice: voiceOverride, pitch: "+0Hz", rate: "+0%" };
+  }
+
+  // 1. Character identity voice (DB persona profile): the character's
+  // own Edge neural voice, matched to gender + nationality. Highest priority.
+  if (personaVoice?.edgeVoice) {
+    return { voice: personaVoice.edgeVoice, pitch: "+0Hz", rate: "+0%" };
   }
 
   const normalizedName = (personaName ?? "").trim().toLowerCase();
@@ -176,12 +191,17 @@ async function callFishAudio(
 async function synthesizeFishAudio(
   text: string,
   personaName?: string,
-  dialect: Dialect = "egyptian"
+  dialect: Dialect = "egyptian",
+  personaVoice?: PersonaVoice
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   const apiKey = process.env.FISH_AUDIO_API_KEY;
   if (!apiKey) return null;
 
-  const referenceId = fishVoiceFor(dialect, personaName ?? "", isFemaleName(personaName));
+  // Character voice: DB persona.voice_id first (the character's OWN
+  // reference timbre — gender + nationality matched); registry/legacy
+  // name-based mapping only as fallback.
+  const referenceId =
+    personaVoice?.fishVoiceId ?? fishVoiceFor(dialect, personaName ?? "", isFemaleName(personaName));
   return callFishAudio(referenceId, text, apiKey);
 }
 
@@ -214,16 +234,17 @@ export async function synthesizeStudentSpeech(
   text: string,
   personaName?: string,
   voiceOverride?: string,
-  dialect?: string
+  dialect?: string,
+  personaVoice?: PersonaVoice
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   if (!text || !text.trim()) return null;
 
   const dialectValue = parseDialect(dialect);
-  const profile = resolveVoiceProfile(personaName, voiceOverride, dialectValue);
+  const profile = resolveVoiceProfile(personaName, voiceOverride, dialectValue, personaVoice);
   const normalizedText = prepareTextForTts(text.trim(), dialectValue);
   if (!normalizedText) return null;
 
-  const cacheKey = `v5:fish-${fishModel()}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}:::${normalizedText}`;
+  const cacheKey = `v6:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}:::${normalizedText}`;
 
   if (audioCache.has(cacheKey)) {
     return audioCache.get(cacheKey)!;
@@ -236,7 +257,7 @@ export async function synthesizeStudentSpeech(
   //    failure (402 credit, timeout, outage).
   if (!voiceOverride && process.env.FISH_AUDIO_API_KEY) {
     try {
-      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue);
+      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice);
     } catch (e) {
       console.warn("Fish Audio synthesis error:", e);
     }
@@ -275,6 +296,58 @@ export async function synthesizeStudentSpeech(
   return resultAudio;
 }
 
+// ---------------------------------------------------------------------
+// Character voice resolution: DB persona profile (authoritative) with the
+// static registry as fallback. The nationality of the character controls
+// its voice — Egyptian characters get Egyptian voices, Saudi characters
+// get Saudi voices, gender always matched.
+// ---------------------------------------------------------------------
+async function resolvePersonaVoice(
+  personaId?: string,
+  avatarKey?: string,
+  personaName?: string,
+  dialect?: string
+): Promise<PersonaVoice | undefined> {
+  // 1. DB persona profile (authoritative — persisted character identity)
+  try {
+    const { createClient } = await import("@/lib/supabase/server");
+    const db = await createClient();
+    let query = db.from("student_personas").select("voice_id, edge_voice, gender, dialect, avatar_key");
+    query = personaId
+      ? query.eq("id", personaId)
+      : query.eq("avatar_key", avatarKey ?? "__none__");
+    const { data } = await query.limit(1);
+    const row = (data as Array<{ voice_id?: string | null; edge_voice?: string | null; gender?: string; dialect?: string }> | null)?.[0];
+    if (row) {
+      return { fishVoiceId: row.voice_id ?? null, edgeVoice: row.edge_voice ?? null, gender: row.gender ?? null };
+    }
+  } catch {
+    // fall through to registry
+  }
+
+  // 2. Static registry fallback (avatarKey or name → identity)
+  const character = resolveCharacter(avatarKey, personaName);
+  if (character) {
+    // Registry knows identity; fish reference + edge voice per nationality
+    // and gender come from the dialect map defaults.
+    const edgeVoice =
+      character.nationality === "SA"
+        ? character.gender === "female"
+          ? EDGE_VOICES.saudi.female
+          : EDGE_VOICES.saudi.male
+        : character.gender === "female"
+        ? EDGE_VOICES.egyptian.female
+        : EDGE_VOICES.egyptian.male;
+    const fishVoiceId = fishVoiceFor(
+      character.nationality === "SA" ? "saudi" : "egyptian",
+      character.key,
+      character.gender === "female"
+    );
+    return { fishVoiceId, edgeVoice, gender: character.gender };
+  }
+  return undefined;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Auth: the original route accepted anonymous callers; production
@@ -285,18 +358,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
     }
 
-    const { text, personaName, voiceOverride, dialect } = (await request.json()) as {
+    const { text, personaName, voiceOverride, dialect, personaId, avatarKey } = (await request.json()) as {
       text?: string;
       personaName?: string;
       voiceOverride?: string;
       dialect?: string;
+      personaId?: string;
+      avatarKey?: string;
     };
 
     if (!text || !text.trim()) {
       return NextResponse.json({ error: "No text provided for audio synthesis" }, { status: 400 });
     }
 
-    const resultAudio = await synthesizeStudentSpeech(text, personaName, voiceOverride, dialect);
+    // Character voice identity: resolve from the DB persona profile when a
+    // personaId is supplied (live-room fast path pre-synthesis does this
+    // internally); for direct client calls resolve via the registry using
+    // the character's avatar key / name. The voice ALWAYS belongs to the
+    // character — the client never picks voices.
+    let personaVoice: PersonaVoice | undefined;
+    if (personaId || avatarKey || personaName) {
+      personaVoice = await resolvePersonaVoice(personaId, avatarKey, personaName, dialect);
+    }
+
+    const resultAudio = await synthesizeStudentSpeech(text, personaName, voiceOverride, dialect, personaVoice);
 
     if (!resultAudio) {
       return NextResponse.json({ error: "Failed to synthesize audio" }, { status: 500 });

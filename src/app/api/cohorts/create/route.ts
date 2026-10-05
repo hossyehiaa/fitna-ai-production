@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Cohort creation crashed:", err);
     return NextResponse.json(
-      { error: "حصل خطأ غير متوقع أثناء إنشاء المجموعة" },
+      { error: "حدث خطأ غير متوقع أثناء إنشاء المجموعة" },
       { status: 500 }
     );
   }

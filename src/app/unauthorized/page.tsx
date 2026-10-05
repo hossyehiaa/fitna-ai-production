@@ -19,7 +19,7 @@ export default async function UnauthorizedPage() {
       <p className="text-xs text-[#071B3A]/60 dark:text-white/60 max-w-sm">
         {isEn
           ? "You do not have permission to access this page with your current account role."
-          : "مفيش صلاحية عندك تدخل الصفحة دي بحسابك الحالي."}
+          : "لا تملك صلاحية الوصول إلى هذه الصفحة بحسابك الحالي."}
       </p>
       <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
         <Link

@@ -70,7 +70,7 @@ export function GrowthChart({ sessions }: { sessions: SessionPoint[] }) {
         <p className="text-xs text-[#071B3A]/40 dark:text-white/40 py-12 text-center">
           {lang === "en"
             ? "Not enough data to graph trends yet — complete more simulations."
-            : "لسه مفيش بيانات كفاية لعرض التطور — كمّل جلسات أكتر."}
+            : "لا تتوفر بيانات كافية لعرض التطور بعد — واصل الجلسات لمزيد من النتائج."}
         </p>
       ) : (
         <>

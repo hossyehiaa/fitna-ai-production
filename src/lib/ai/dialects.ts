@@ -109,11 +109,21 @@ export const FISH_VOICES: Record<Dialect, Record<string, string>> = {
     nour: 'fb77d7877e404c0fb2427e7aec55b247',
   },
   saudi: {
-    // Saudi classroom: gender-matched young Arabic voices
-    sara: '14f1000b77d547eeb5f03b474dd29e0f', // Asmaa — conversational girl
-    nour: '7eee0787bf1a476fb0864270853e344a', // Yee — soft, gentle girl
-    omar: '1d51fdd65ff14342aec4dffa0ef58386', // young educational boy
-    yassin: '7b301c14ee0b447cb8705b7e247067e1', // young boy
+    // Saudi classroom voices keyed by the SAUDI character names
+    // (gender-matched young Arabic reference voices):
+    ريم: '14f1000b77d547eeb5f03b474dd29e0f', // Asmaa — conversational girl
+    reem: '14f1000b77d547eeb5f03b474dd29e0f',
+    جوري: '7eee0787bf1a476fb0864270853e344a', // Yee — soft, gentle girl
+    jouri: '7eee0787bf1a476fb0864270853e344a',
+    سلطان: '1d51fdd65ff14342aec4dffa0ef58386', // young educational boy
+    sultan: '1d51fdd65ff14342aec4dffa0ef58386',
+    فهد: '7b301c14ee0b447cb8705b7e247067e1', // young boy
+    fahad: '7b301c14ee0b447cb8705b7e247067e1',
+    // legacy keys (kept so old callers still resolve gender-correctly)
+    sara: '14f1000b77d547eeb5f03b474dd29e0f',
+    nour: '7eee0787bf1a476fb0864270853e344a',
+    omar: '1d51fdd65ff14342aec4dffa0ef58386',
+    yassin: '7b301c14ee0b447cb8705b7e247067e1',
   },
 }
 

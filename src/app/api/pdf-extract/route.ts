@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     const text = result.text?.trim();
     if (!text) {
       return NextResponse.json(
-        { error: "معرفناش نستخرج نص من الملف ده. جرب ملف تاني أو اكتب ملخص بدل كده." },
+        { error: "تعذّر استخراج النص من هذا الملف. يُرجى تجربة ملف آخر أو كتابة الملخص يدويًا." },
         { status: 422 }
       );
     }
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("PDF extraction failed:", err);
     return NextResponse.json(
-      { error: "حصل خطأ أثناء قراءة الملف. جرب ملف PDF تاني." },
+      { error: "حدث خطأ أثناء قراءة الملف. يُرجى تجربة ملف PDF آخر." },
       { status: 500 }
     );
   }

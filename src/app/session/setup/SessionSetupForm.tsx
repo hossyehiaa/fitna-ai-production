@@ -7,6 +7,7 @@ import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { signOutAction } from "@/app/(auth)/login/actions";
+import { resolveCharacter } from "@/lib/characters/registry";
 import { useTranslation } from "@/lib/i18n/context";
 import { X, GraduationCap, UserCheck, MessageSquare, Globe } from "lucide-react";
 
@@ -25,19 +26,26 @@ type ClassroomStyle = "balanced" | "disruptive" | "disengaged";
 type TrainingObjective = "socratic_focus" | "talk_time_reduction" | "inclusive_engagement" | "behavior_redirection";
 type ClassroomDialect = "egyptian" | "saudi";
 
-function getStudentPreviewAvatar(name: string): { key: string; image: string; ringColor: string } {
-  const trimmed = name.trim().toLowerCase();
-  if (trimmed.includes("عمر") || trimmed.includes("omar")) {
-    return { key: "omar", image: "/students/omar/neutral.jpg", ringColor: "border-teal-400 ring-2 ring-teal-400/30" };
-  }
-  if (trimmed.includes("سارة") || trimmed.includes("sara")) {
-    return { key: "sara", image: "/students/sara/neutral.jpg", ringColor: "border-rose-400 ring-2 ring-rose-400/30" };
-  }
-  if (trimmed.includes("ياسين") || trimmed.includes("yassin")) {
-    return { key: "yassin", image: "/students/yassin/neutral.jpg", ringColor: "border-blue-400 ring-2 ring-blue-400/30" };
-  }
-  if (trimmed.includes("نور") || trimmed.includes("nour")) {
-    return { key: "nour", image: "/students/nour/neutral.jpg", ringColor: "border-purple-400 ring-2 ring-purple-400/30" };
+function getStudentPreviewAvatar(name: string, avatarKey?: string | null): { key: string; image: string; ringColor: string } {
+  // Character identity: DB avatar_key first, deterministic name fallback.
+  // Saudi students resolve to their OWN sprites — never an Egyptian girl's.
+  const character = resolveCharacter(avatarKey, name);
+  if (character) {
+    const ringMap: Record<string, string> = {
+      omar: "border-teal-400 ring-2 ring-teal-400/30",
+      sara: "border-rose-400 ring-2 ring-rose-400/30",
+      yassin: "border-blue-400 ring-2 ring-blue-400/30",
+      nour: "border-purple-400 ring-2 ring-purple-400/30",
+      sultan: "border-amber-400 ring-2 ring-amber-400/30",
+      fahad: "border-emerald-400 ring-2 ring-emerald-400/30",
+      reem: "border-fuchsia-400 ring-2 ring-fuchsia-400/30",
+      jouri: "border-sky-400 ring-2 ring-sky-400/30",
+    };
+    return {
+      key: character.key,
+      image: `${character.spriteDir}/neutral.jpg`,
+      ringColor: ringMap[character.key] ?? "border-[#12B8C4] ring-2 ring-[#12B8C4]/30",
+    };
   }
   return { key: "student", image: "/students/sara/neutral.jpg", ringColor: "border-[#12B8C4] ring-2 ring-[#12B8C4]/30" };
 }
@@ -1212,7 +1220,7 @@ export function SessionSetupForm({
               {personas
                 .filter((p) => (p.dialect ?? "egyptian_arabic").startsWith(dialect))
                 .map((p, idx) => {
-                const avatar = getStudentPreviewAvatar(p.name);
+                const avatar = getStudentPreviewAvatar(p.name, (p as { avatar_key?: string | null }).avatar_key);
                 const colorSchemes = [
                   { bg: "bg-[#12B8C4]/20", text: "text-[#12B8C4]", bar: "bg-[#12B8C4]" },
                   { bg: "bg-[#FFB52E]/25", text: "text-amber-800 dark:text-[#FFB52E]", bar: "bg-[#FFB52E]" },

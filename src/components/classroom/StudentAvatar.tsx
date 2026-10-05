@@ -3,9 +3,10 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import Image from "next/image";
 import { useLipSync } from "@/lib/audio/lipSyncHook";
+import { characterKeyByName, CHARACTERS } from "@/lib/characters/registry";
 import { Hand, Moon } from "lucide-react";
 
-export type StudentAvatarPersona = "omar" | "sara" | "yassin" | "nour";
+export type StudentAvatarPersona = "omar" | "sara" | "yassin" | "nour" | "sultan" | "fahad" | "reem" | "jouri";
 
 interface StudentAvatarProps {
   name: string;
@@ -26,14 +27,11 @@ export function StudentAvatar({
   size = 110,
   className = "",
 }: StudentAvatarProps) {
-  // Normalize name to persona key matching reference sheet
+  // Deterministic character identity (registry): gender + nationality
+  // always match the character — no wrong-gender fallback.
   const personaKey: StudentAvatarPersona = useMemo(() => {
-    const trimmed = name.trim().toLowerCase();
-    if (trimmed.includes("عمر") || trimmed.includes("omar")) return "omar";
-    if (trimmed.includes("سارة") || trimmed.includes("sara")) return "sara";
-    if (trimmed.includes("ياسين") || trimmed.includes("yassin")) return "yassin";
-    if (trimmed.includes("نور") || trimmed.includes("nour")) return "nour";
-    return "sara";
+    const resolved = characterKeyByName(name);
+    return (resolved ?? "sara") as StudentAvatarPersona;
   }, [name]);
 
   // Hook for acoustic and cadence-based lip sync
@@ -127,6 +125,18 @@ export function StudentAvatar({
           glow: "rgba(168, 85, 247, 0.4)",
           tagColor: "text-purple-300",
         };
+      case "sultan":
+      case "fahad":
+      case "reem":
+      case "jouri": {
+        const t = CHARACTERS[personaKey].theme;
+        return {
+          pillBg: t.pillBg,
+          pillBorder: t.pillBorder,
+          glow: t.glow,
+          tagColor: t.tagColor,
+        };
+      }
     }
   }, [personaKey]);
 
@@ -166,7 +176,7 @@ export function StudentAvatar({
         <div className="absolute -top-3.5 -right-3 z-30 flex items-center animate-bounce duration-700">
           <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold text-[10px] shadow-lg border border-white/60">
             <Hand className="w-2.5 h-2.5" />
-            <span>أنا عندي سؤال!</span>
+            <span>لديَّ سؤال!</span>
           </div>
         </div>
       )}
@@ -176,7 +186,7 @@ export function StudentAvatar({
         <div className="absolute -top-3.5 -left-2.5 z-30 flex items-center animate-pulse">
           <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/95 text-amber-300 font-bold text-[10px] shadow-lg border border-amber-500/40">
             <Moon className="w-2.5 h-2.5" />
-            <span>مش فاكر بصراحة</span>
+            <span>لا أتذكّر بصراحة</span>
           </div>
         </div>
       )}
@@ -196,7 +206,7 @@ export function StudentAvatar({
             className="w-1 bg-[#12B8C4] rounded-full animate-pulse"
             style={{ height: `${6 + mouthOpenness * 10}px`, animationDelay: "200ms" }}
           />
-          <span className="text-[9px] font-bold text-[#12B8C4] mr-1">بيتكلم...</span>
+          <span className="text-[9px] font-bold text-[#12B8C4] mr-1">يتحدّث...</span>
         </div>
       )}
     </div>

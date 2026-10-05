@@ -27,10 +27,10 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       .single();
 
     if (!session || session.teacher_id !== user.id) {
-      return NextResponse.json({ error: "الجلسة دي مش بتاعتك" }, { status: 403 });
+      return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
     }
     if (session.status !== "completed") {
-      return NextResponse.json({ error: "الجلسة دي لسه مخلّصتش" }, { status: 400 });
+      return NextResponse.json({ error: "لم تُنهَ هذه الجلسة بعد" }, { status: 400 });
     }
 
     const { data: events } = await supabase
@@ -91,7 +91,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       if (fallbackError) {
         console.error("Report regeneration save failed completely:", fallbackError);
         return NextResponse.json(
-          { error: `حصل خطأ أثناء حفظ التقرير: ${fallbackError.message}` },
+          { error: `حدث خطأ أثناء حفظ التقرير: ${fallbackError.message}` },
           { status: 500 }
         );
       }
@@ -100,6 +100,6 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("Report regeneration crashed:", err);
-    return NextResponse.json({ error: "حصل خطأ أثناء توليد التقرير. جرب تاني." }, { status: 500 });
+    return NextResponse.json({ error: "حدث خطأ أثناء توليد التقرير. يُرجى المحاولة مرة أخرى." }, { status: 500 });
   }
 }

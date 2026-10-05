@@ -529,6 +529,8 @@ export async function generateStudentReactions(params: {
   resolvedUnknownNames?: string[];
   teacherFullName?: string;
   dialect?: string;
+  /** Actual classroom participant names — drives name-based routing. */
+  participantNames?: string[];
 }): Promise<StudentTurnResult[]> {
   const {
     personas,
@@ -553,6 +555,7 @@ export async function generateStudentReactions(params: {
     resolvedUnknownNames = [],
     teacherFullName,
     dialect: dialectInput,
+    participantNames = [],
   } = params;
 
   const dialect = parseDialect(dialectInput);
@@ -579,6 +582,7 @@ export async function generateStudentReactions(params: {
     studentsWithHandRaised,
     resolvedUnknownNames,
     lockedTeacherTitle,
+    participantNames,
   });
   const decision = decideClassroomReaction(
     studentBrains,
@@ -1025,6 +1029,8 @@ export function generateFallbackReactions(params: {
   fullLessonHistory?: string;
   teacherFullName?: string;
   dialect?: string;
+  /** Actual classroom participant names — drives name-based routing. */
+  participantNames?: string[];
 }): StudentTurnResult[] {
   const {
     personas,
@@ -1068,6 +1074,7 @@ export function generateFallbackReactions(params: {
     studentsWithHandRaised,
     resolvedUnknownNames,
     lockedTeacherTitle,
+    participantNames,
   });
 
   const decision = decideClassroomReaction(

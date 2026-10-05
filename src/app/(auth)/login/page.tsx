@@ -15,8 +15,8 @@ const words = {
     dir: "rtl",
     login: "تسجيل الدخول",
     signup: "إنشاء حساب",
-    welcomeLogin: "أهلاً بيك في Fitna AI",
-    welcomeSignup: "خلّيك فِطِن من أول خطوة",
+    welcomeLogin: "مرحبًا بك في Fitna AI",
+    welcomeSignup: "كن فَطِنًا منذ الخطوة الأولى",
     subLogin: "ادخل إلى مساحة التدريب التي تحوّل مواقف الفصل إلى ممارسة واثقة.",
     subSignup: "أنشئ مساحتك وابدأ في تدريب ردود فعلك قبل أول حصة.",
     google: "المتابعة بحساب Google",
@@ -32,13 +32,13 @@ const words = {
     forgot: "نسيت كلمة المرور؟",
     submitLogin: "تسجيل الدخول",
     submitSignup: "إنشاء حساب",
-    switchLogin: "معندكش حساب؟",
-    switchSignup: "عندك حساب بالفعل؟",
-    switchLoginLink: "اعمل واحد دلوقتي",
-    switchSignupLink: "سجل دخول",
+    switchLogin: "ليس لديك حساب؟",
+    switchSignup: "لديك حساب بالفعل؟",
+    switchLoginLink: "أنشئ حسابًا الآن",
+    switchSignupLink: "تسجيل الدخول",
     back: "العودة إلى الصفحة الرئيسية",
     sideSlogan: "Master the Classroom Before Entering It.",
-    sideArabic: "قبل ما تدخل الفصل... خليك فِطِن.",
+    sideArabic: "قبل أن تدخل الفصل... كُن فَطِنًا.",
     sideNote: "Practice the moment before it becomes a problem.",
     language: "EN",
     secure: "بياناتك محمية ومشفّرة",
@@ -47,11 +47,23 @@ const words = {
     forgotSubmit: "إرسال رابط الاستعادة",
     forgotBack: "العودة لتسجيل الدخول",
     resetLinkSent: "تم إرسال رابط استعادة كلمة المرور إلى بريدك.",
+    accountTypeQuestion: "نوع الحساب",
+    accountIndividualTitle: "فرد",
+    accountIndividualDesc: "تدريب شخصي على إدارة الفصل",
     roleQuestion: "كيف ستستخدم فِطنة؟",
-    roleTeacherTitle: "معلم (تدريب شخصي)",
+    roleTeacherTitle: "معلّم",
     roleTeacherDesc: "تدريب فردي ومحاكاة لمواقف الفصل",
-    roleAdminTitle: "مشرف تربوي / مؤسسة",
+    roleAdminTitle: "مؤسسة",
     roleAdminDesc: "إدارة وتدريب فريق المعلمين ومتابعة نموهم",
+    nationalityQuestion: "الجنسية",
+    nationalitySA: "سعودي 🇸🇦",
+    nationalityEG: "مصري 🇪🇬",
+    orgSA: "مؤسسة سعودية",
+    orgEG: "مؤسسة مصرية",
+    teacherSA: "معلّم سعودي",
+    teacherEG: "معلّم مصري",
+    individualSA: "مستخدم سعودي",
+    individualEG: "مستخدم مصري",
     demoBtn: "تجربة المنصة فوراً بحساب تجريبي (بدون تسجيل)",
     demoSub: "وصول كامل ومجاني للمعلم والمحاكاة بنقرة واحدة"
   },
@@ -91,11 +103,23 @@ const words = {
     forgotSubmit: "Send reset link",
     forgotBack: "Back to login",
     resetLinkSent: "A password reset link has been sent to your email.",
+    accountTypeQuestion: "Account Type",
+    accountIndividualTitle: "Individual",
+    accountIndividualDesc: "Personal classroom management training",
     roleQuestion: "How will you use Fitna AI?",
-    roleTeacherTitle: "Teacher (Individual)",
+    roleTeacherTitle: "Teacher",
     roleTeacherDesc: "Individual classroom practice & simulation",
-    roleAdminTitle: "Leader / Institution",
+    roleAdminTitle: "Institution",
     roleAdminDesc: "Manage and train teacher teams",
+    nationalityQuestion: "Nationality",
+    nationalitySA: "Saudi 🇸🇦",
+    nationalityEG: "Egyptian 🇪🇬",
+    orgSA: "Saudi organization",
+    orgEG: "Egyptian organization",
+    teacherSA: "Saudi teacher",
+    teacherEG: "Egyptian teacher",
+    individualSA: "Saudi user",
+    individualEG: "Egyptian user",
     demoBtn: "1-Click Instant Demo (No Signup Required)",
     demoSub: "Full instant access to the simulation & classroom"
   }
@@ -117,6 +141,11 @@ function LoginPageContent() {
   const [showForgot, setShowForgot] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<"teacher" | "institution_admin">("teacher");
+  // Account type: فرد | معلّم | مؤسسة (mapped to role + account_type)
+  const [accountType, setAccountType] = useState<"individual" | "teacher" | "organization">("teacher");
+  // Nationality: explicit user selection (EG | SA) — never inferred from
+  // locale, IP, or device.
+  const [country, setCountry] = useState<"EG" | "SA">("EG");
   const [googleComingSoon, setGoogleComingSoon] = useState(false);
 
   const handleGoogleClick = () => {
@@ -415,24 +444,57 @@ function LoginPageContent() {
                 <label style={{ fontSize: "11px", fontWeight: "700", marginBottom: "8px", display: "block" }}>
                   {t.roleQuestion}
                 </label>
-                <input type="hidden" name="role" value={role} />
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "10px" }}>
+                <input type="hidden" name="role" value={accountType === "organization" ? "institution_admin" : "teacher"} />
+                <input type="hidden" name="account_type" value={accountType} />
+                <input type="hidden" name="country" value={country} />
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px" }}>
                   <button
                     type="button"
-                    onClick={() => setRole("teacher")}
+                    onClick={() => {
+                      setAccountType("individual");
+                      setRole("teacher");
+                    }}
                     style={{
                       textAlign: "inherit",
                       padding: "12px 14px",
                       borderRadius: "12px",
-                      border: role === "teacher" ? "2px solid var(--teal)" : "1px solid var(--border)",
-                      background: role === "teacher" ? "color-mix(in srgb, var(--teal) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
+                      border: accountType === "individual" ? "2px solid var(--teal)" : "1px solid var(--border)",
+                      background: accountType === "individual" ? "color-mix(in srgb, var(--teal) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
                       cursor: "pointer",
                       transition: "all 0.2s ease",
-                      boxShadow: role === "teacher" ? "0 0 14px rgba(18,184,196,0.18)" : "none",
+                      boxShadow: accountType === "individual" ? "0 0 14px rgba(18,184,196,0.18)" : "none",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                      <UserRound size={16} color={role === "teacher" ? "var(--teal)" : "var(--muted)"} />
+                      <UserRound size={16} color={accountType === "individual" ? "var(--teal)" : "var(--muted)"} />
+                      <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--foreground)" }}>
+                        {t.accountIndividualTitle}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: "1.5" }}>
+                      {t.accountIndividualDesc}
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountType("teacher");
+                      setRole("teacher");
+                    }}
+                    style={{
+                      textAlign: "inherit",
+                      padding: "12px 14px",
+                      borderRadius: "12px",
+                      border: accountType === "teacher" ? "2px solid var(--teal)" : "1px solid var(--border)",
+                      background: accountType === "teacher" ? "color-mix(in srgb, var(--teal) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      boxShadow: accountType === "teacher" ? "0 0 14px rgba(18,184,196,0.18)" : "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <UserRound size={16} color={accountType === "teacher" ? "var(--teal)" : "var(--muted)"} />
                       <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--foreground)" }}>
                         {t.roleTeacherTitle}
                       </span>
@@ -444,26 +506,87 @@ function LoginPageContent() {
 
                   <button
                     type="button"
-                    onClick={() => setRole("institution_admin")}
+                    onClick={() => {
+                      setAccountType("organization");
+                      setRole("institution_admin");
+                    }}
                     style={{
                       textAlign: "inherit",
                       padding: "12px 14px",
                       borderRadius: "12px",
-                      border: role === "institution_admin" ? "2px solid var(--amber)" : "1px solid var(--border)",
-                      background: role === "institution_admin" ? "color-mix(in srgb, var(--amber) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
+                      border: accountType === "organization" ? "2px solid var(--amber)" : "1px solid var(--border)",
+                      background: accountType === "organization" ? "color-mix(in srgb, var(--amber) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
                       cursor: "pointer",
                       transition: "all 0.2s ease",
-                      boxShadow: role === "institution_admin" ? "0 0 14px rgba(255,181,46,0.18)" : "none",
+                      boxShadow: accountType === "organization" ? "0 0 14px rgba(255,181,46,0.18)" : "none",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                      <UsersRound size={16} color={role === "institution_admin" ? "var(--amber)" : "var(--muted)"} />
+                      <UsersRound size={16} color={accountType === "organization" ? "var(--amber)" : "var(--muted)"} />
                       <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--foreground)" }}>
                         {t.roleAdminTitle}
                       </span>
                     </div>
                     <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: "1.5" }}>
                       {t.roleAdminDesc}
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Nationality Selection — explicit, never inferred */}
+              <div style={{ marginBottom: "14px" }}>
+                <label style={{ fontSize: "11px", fontWeight: "700", marginBottom: "8px", display: "block" }}>
+                  {t.nationalityQuestion}
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setCountry("SA")}
+                    style={{
+                      textAlign: "inherit",
+                      padding: "12px 14px",
+                      borderRadius: "12px",
+                      border: country === "SA" ? "2px solid var(--teal)" : "1px solid var(--border)",
+                      background: country === "SA" ? "color-mix(in srgb, var(--teal) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      boxShadow: country === "SA" ? "0 0 14px rgba(18,184,196,0.18)" : "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "16px" }}>🇸🇦</span>
+                      <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--foreground)" }}>
+                        {t.nationalitySA}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: "1.5" }}>
+                      {accountType === "organization" ? t.orgSA : accountType === "teacher" ? t.teacherSA : t.individualSA}
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCountry("EG")}
+                    style={{
+                      textAlign: "inherit",
+                      padding: "12px 14px",
+                      borderRadius: "12px",
+                      border: country === "EG" ? "2px solid var(--teal)" : "1px solid var(--border)",
+                      background: country === "EG" ? "color-mix(in srgb, var(--teal) 14%, transparent)" : "color-mix(in srgb, var(--background) 40%, transparent)",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      boxShadow: country === "EG" ? "0 0 14px rgba(18,184,196,0.18)" : "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "16px" }}>🇪🇬</span>
+                      <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--foreground)" }}>
+                        {t.nationalityEG}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: "1.5" }}>
+                      {accountType === "organization" ? t.orgEG : accountType === "teacher" ? t.teacherEG : t.individualEG}
                     </p>
                   </button>
                 </div>

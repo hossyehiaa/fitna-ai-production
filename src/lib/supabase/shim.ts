@@ -36,6 +36,8 @@ const TABLES: Record<string, Record<string, ColType>> = {
     institution_id: 'uuid', preferred_language: 'text', preferred_theme: 'text',
     teaching_experience: 'text', teaching_level: 'text', subject: 'text',
     training_goals: 'text[]', password_hash: 'text', created_at: 'timestamptz',
+    // Character/account identity (explicit user selection at signup)
+    account_type: 'text', country: 'text',
   },
   lesson_topics: {
     id: 'uuid', title_ar: 'text', title_en: 'text', institution_id: 'uuid',
@@ -45,6 +47,12 @@ const TABLES: Record<string, Record<string, ColType>> = {
     id: 'uuid', name: 'text', age: 'int', dialect: 'text',
     personality_prompt: 'text', base_attention: 'int', strengths: 'text[]',
     weaknesses: 'text[]', is_active: 'bool', created_at: 'timestamptz',
+    // Character identity system: stable key + gender + nationality +
+    // avatar + voice configuration (deterministic, persisted)
+    character_key: 'text', gender: 'text', nationality: 'text',
+    avatar_key: 'text', voice_provider: 'text', voice_id: 'text',
+    edge_voice: 'text', personality: 'text', speaking_style: 'text',
+    age_range: 'text',
   },
   sessions: {
     id: 'uuid', teacher_id: 'uuid', institution_id: 'uuid', topic_id: 'uuid',

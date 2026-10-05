@@ -40,7 +40,7 @@ export async function updateProfileAction(
 
   if (error) {
     console.error("Profile update failed:", error);
-    return { error: "حصل خطأ أثناء حفظ البيانات" };
+    return { error: "حدث خطأ أثناء حفظ البيانات" };
   }
 
   return { error: null };
@@ -117,7 +117,7 @@ export async function updatePreferencesAction(
 
   if (error) {
     console.error("Preference update failed:", error);
-    return { error: "حصل خطأ أثناء حفظ التفضيلات" };
+    return { error: "حدث خطأ أثناء حفظ التفضيلات" };
   }
 
   cookieStore.set("theme", theme, { path: "/", maxAge: 60 * 60 * 24 * 365 });

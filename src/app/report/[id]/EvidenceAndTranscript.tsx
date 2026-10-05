@@ -210,7 +210,7 @@ export function EvidenceAndTranscript({
         <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
           {transcript.length === 0 ? (
             <p className="text-xs text-[#071B3A]/40 dark:text-white/40 py-8 text-center">
-              {isEn ? "No dialog recorded in this session." : "مفيش حوار مسجّل في الجلسة دي."}
+              {isEn ? "No dialog recorded in this session." : "لا يوجد حوار مسجَّل في هذه الجلسة."}
             </p>
           ) : (
             transcript.map((line) => {

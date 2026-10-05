@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const audio = formData.get("audio");
   if (!(audio instanceof File)) {
-    return NextResponse.json({ error: "مفيش تسجيل صوتي" }, { status: 400 });
+    return NextResponse.json({ error: "لا يوجد تسجيل صوتي" }, { status: 400 });
   }
 
   try {
@@ -219,12 +219,12 @@ export async function POST(request: NextRequest) {
 
     // If result has no valid Unicode letters or digits, reject cleanly
     if (!/[\p{L}\p{N}]/u.test(text) || text.trim().length < 1) {
-      return NextResponse.json({ error: "الصوت غير واضح كفاية، جرب تاني" }, { status: 400 });
+      return NextResponse.json({ error: "الصوت غير واضح بما يكفي. يُرجى المحاولة مرة أخرى." }, { status: 400 });
     }
 
     return NextResponse.json({ text });
   } catch (err) {
     console.error("STT failed:", err);
-    return NextResponse.json({ error: "معرفناش نفهم الصوت، جرب تاني" }, { status: 500 });
+    return NextResponse.json({ error: "تعذّر فهم الصوت. يُرجى المحاولة مرة أخرى." }, { status: 500 });
   }
 }

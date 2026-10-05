@@ -49,6 +49,9 @@ model User {
   trainingGoals      String[] @default([]) @map("training_goals")
   // Production auth: scrypt$N$r$p$saltB64$hashB64 (Supabase Auth replacement)
   passwordHash String? @map("password_hash")
+  // Account creation: explicit user selection (never inferred from locale/IP)
+  country       String? // 'EG' | 'SA'
+  accountType   String? @map("account_type") // 'individual' | 'organization' | 'teacher'
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   institution       Institution?       @relation(fields: [institutionId], references: [id], onDelete: SetNull)
@@ -89,6 +92,20 @@ model StudentPersona {
   weaknesses        String[] @default([])
   isActive          Boolean  @default(true) @map("is_active")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // Character Identity System (production fix): stable key + gender +
+  // nationality + avatar + per-character voice configuration. Deterministic
+  // and persisted — never regenerated per session.
+  characterKey      String?  @unique @map("character_key")
+  gender            String   @default("male")
+  nationality       String   @default("EG")
+  avatarKey         String?  @map("avatar_key")
+  voiceProvider     String   @default("fish") @map("voice_provider")
+  voiceId           String?  @map("voice_id")
+  edgeVoice         String?  @map("edge_voice")
+  personality       String?
+  speakingStyle     String?  @map("speaking_style")
+  ageRange          String?  @map("age_range")
 
   sessionStudents SessionStudent[]
 

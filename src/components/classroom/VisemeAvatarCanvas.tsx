@@ -2,16 +2,24 @@
 
 import React, { useEffect, useRef } from "react";
 import { VisemeType } from "@/lib/audio/visemeClassifier";
+import type { CharacterKey } from "@/lib/characters/registry";
 
+// Mouth region per character sprite (1024×1024) — used to overlay the
+// viseme mouth cut-outs. Saudi characters use approximate face-center
+// boxes; refined per-character frames load when present.
 export const STUDENT_MOUTH_BOXES: Record<string, { x: number; y: number; w: number; h: number }> = {
   sara: { x: 409, y: 437, w: 210, h: 110 },
   omar: { x: 407, y: 461, w: 210, h: 110 },
   yassin: { x: 405, y: 461, w: 210, h: 110 },
   nour: { x: 408, y: 465, w: 200, h: 106 },
+  sultan: { x: 407, y: 465, w: 210, h: 110 },
+  fahad: { x: 407, y: 465, w: 210, h: 110 },
+  reem: { x: 407, y: 445, w: 210, h: 110 },
+  jouri: { x: 407, y: 455, w: 200, h: 105 },
 };
 
 interface VisemeAvatarCanvasProps {
-  persona: "sara" | "omar" | "yassin" | "nour";
+  persona: CharacterKey;
   baseState: "attentive" | "hand_raised" | "distracted";
   isSpeaking: boolean;
   currentViseme: VisemeType;

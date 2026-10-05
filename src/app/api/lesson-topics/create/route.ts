@@ -45,12 +45,12 @@ export async function POST(request: NextRequest) {
 
     if (error || !topic) {
       console.error("Topic creation failed:", error);
-      return NextResponse.json({ error: "حصل خطأ أثناء إضافة الموضوع" }, { status: 500 });
+      return NextResponse.json({ error: "حدث خطأ أثناء إضافة الموضوع" }, { status: 500 });
     }
 
     return NextResponse.json({ topic });
   } catch (err) {
     console.error("Topic creation crashed:", err);
-    return NextResponse.json({ error: "حصل خطأ أثناء إضافة الموضوع" }, { status: 500 });
+    return NextResponse.json({ error: "حدث خطأ أثناء إضافة الموضوع" }, { status: 500 });
   }
 }

@@ -4,13 +4,14 @@ import React, { useMemo } from "react";
 import { VisemeAvatarCanvas } from "./VisemeAvatarCanvas";
 import { useVisemeClassifier } from "@/lib/audio/visemeClassifier";
 import { Zap, Hand, Moon, Volume2, CheckCircle2 } from "lucide-react";
-
-export type StudentPersonaId = "sara" | "omar" | "yassin" | "nour";
+import { CHARACTERS, resolveCharacter, type CharacterKey } from "@/lib/characters/registry";
 
 interface StudentVideoCardProps {
   name: string;
   age: number;
   attention: number;
+  /** DB persona.avatar_key — authoritative character identity. */
+  avatarKey?: string | null;
   state?: "attentive" | "hand_raised" | "distracted";
   isSpeaking?: boolean;
   audioElement?: HTMLAudioElement | null;
@@ -22,62 +23,25 @@ export function StudentVideoCard({
   name,
   age,
   attention,
+  avatarKey,
   state = "attentive",
   isSpeaking = false,
   audioElement = null,
   compact = true,
   className = "",
 }: StudentVideoCardProps) {
-  // Normalize name to persona key
-  const personaKey: StudentPersonaId = useMemo(() => {
-    const trimmed = name.trim().toLowerCase();
-    if (trimmed.includes("عمر") || trimmed.includes("omar")) return "omar";
-    if (trimmed.includes("سارة") || trimmed.includes("sara")) return "sara";
-    if (trimmed.includes("ياسين") || trimmed.includes("yassin")) return "yassin";
-    if (trimmed.includes("نور") || trimmed.includes("nour")) return "nour";
-    return "sara";
-  }, [name]);
+  // Deterministic character identity: DB avatar_key first, then name.
+  // Gender + nationality always come from the character registry — never
+  // a default female sprite for a male student.
+  const character = useMemo(() => {
+    const resolved = resolveCharacter(avatarKey, name);
+    return resolved ?? CHARACTERS.sara;
+  }, [avatarKey, name]);
+  const personaKey: CharacterKey = character.key;
+  const theme = character.theme;
 
   // Hook for acoustic formant & viseme classifier
   const { currentViseme, mouthOpenness } = useVisemeClassifier(audioElement, isSpeaking);
-
-  // Color theme per persona
-  const theme = useMemo(() => {
-    switch (personaKey) {
-      case "omar":
-        return {
-          pillBg: "bg-teal-600",
-          pillBorder: "border-teal-400/40",
-          glow: "rgba(20, 184, 166, 0.45)",
-          ringColor: "ring-teal-400",
-          accentColor: "#14B8A6",
-        };
-      case "sara":
-        return {
-          pillBg: "bg-rose-600",
-          pillBorder: "border-rose-400/40",
-          glow: "rgba(244, 63, 94, 0.45)",
-          ringColor: "ring-rose-400",
-          accentColor: "#FB7185",
-        };
-      case "yassin":
-        return {
-          pillBg: "bg-blue-600",
-          pillBorder: "border-blue-400/40",
-          glow: "rgba(37, 99, 235, 0.45)",
-          ringColor: "ring-blue-400",
-          accentColor: "#3B82F6",
-        };
-      case "nour":
-        return {
-          pillBg: "bg-purple-600",
-          pillBorder: "border-purple-400/40",
-          glow: "rgba(168, 85, 247, 0.45)",
-          ringColor: "ring-purple-400",
-          accentColor: "#A855F7",
-        };
-    }
-  }, [personaKey]);
 
   // Attention status color
   const attentionColor = attention >= 75 ? "text-emerald-400" : attention >= 50 ? "text-amber-400" : "text-rose-400";
@@ -142,7 +106,7 @@ export function StudentVideoCard({
           <div className="absolute top-8 left-2 z-20 animate-pulse">
             <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-slate-900/90 text-rose-300 font-bold text-[11px] shadow-xl border border-rose-500/40 backdrop-blur-md">
               <Moon className="w-3 h-3" />
-              <span>سرحان</span>
+              <span>متشتّت</span>
             </div>
           </div>
         )}
@@ -164,7 +128,7 @@ export function StudentVideoCard({
                 style={{ height: `${3 + mouthOpenness * 8}px` }}
               />
             </div>
-            <span className="text-[9px] font-bold text-[#12B8C4]">بيتكلم...</span>
+            <span className="text-[9px] font-bold text-[#12B8C4]">يتحدّث...</span>
           </div>
         )}
       </div>

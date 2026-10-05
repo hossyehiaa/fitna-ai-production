@@ -41,7 +41,7 @@ export default async function LiveSessionPage({
 
   const personaIds = (sessionStudents ?? []).map((s) => s.persona_id);
   const { data: personas } = personaIds.length
-    ? await supabase.from("student_personas").select("id, name, age, base_attention").in("id", personaIds)
+    ? await supabase.from("student_personas").select("id, name, age, base_attention, avatar_key, gender, nationality, character_key").in("id", personaIds)
     : { data: [] as { id: string; name: string; age: number; base_attention: number }[] };
 
   const students = (sessionStudents ?? []).map((s) => {
@@ -51,6 +51,12 @@ export default async function LiveSessionPage({
       name: persona?.name ?? "؟",
       age: persona?.age ?? 0,
       attention: s.final_attention ?? persona?.base_attention ?? 70,
+      // Character identity (deterministic, persisted): drives avatar +
+      // voice + routing everywhere the session is rendered.
+      avatarKey: (persona as { avatar_key?: string | null } | undefined)?.avatar_key ?? null,
+      gender: (persona as { gender?: string } | undefined)?.gender ?? "male",
+      nationality: (persona as { nationality?: string } | undefined)?.nationality ?? "EG",
+      characterKey: (persona as { character_key?: string | null } | undefined)?.character_key ?? null,
     };
   });
 

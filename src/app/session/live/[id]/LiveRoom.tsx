@@ -33,6 +33,11 @@ type StudentUI = {
   state: StudentState;
   physicalAction?: string;
   actionDescriptionAr?: string;
+  // Character identity (persisted, deterministic):
+  avatarKey?: string | null;
+  gender?: string;
+  nationality?: string;
+  characterKey?: string | null;
 };
 
 type EventLogItem = {
@@ -74,7 +79,7 @@ export function LiveRoom({
   trainingObjective?: TrainingObjective;
   lessonContext?: string | null;
   startedAt: string;
-  initialStudents: { personaId: string; name: string; age: number; attention: number }[];
+  initialStudents: { personaId: string; name: string; age: number; attention: number; avatarKey?: string | null; gender?: string; nationality?: string; characterKey?: string | null }[];
   teacherName?: string;
   dialect?: string;
 }) {
@@ -99,6 +104,20 @@ export function LiveRoom({
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [speakingPersonaId, setSpeakingPersonaId] = useState<string | null>(null);
   const [activeSpeakingAudio, setActiveSpeakingAudio] = useState<HTMLAudioElement | null>(null);
+  // ---- Live conversational state machine (production fix) ----
+  // IDLE → LISTENING → PROCESSING → RESPONDING → SPEAKING → LISTENING …
+  const [meetingState, setMeetingState] = useState<"idle" | "listening" | "processing" | "responding" | "speaking">("idle");
+  // Finish callback of the CURRENTLY playing student audio (barge-in target)
+  const activeAudioFinishRef = useRef<(() => void) | null>(null);
+  // Sustained-voice tracker for barge-in while a student is speaking
+  const bargeInVoiceSinceRef = useRef<number | null>(null);
+  // Playback grace window (ms from playback start) before barge-in arms
+  const playbackStartedAtRef = useRef<number>(0);
+  // Latest utterance that arrived while a turn was processing — replayed
+  // right after, so consecutive turns are never silently dropped.
+  const pendingUtteranceRef = useRef<string | null>(null);
+  // Per-stage latency (debug mode only — never shown to normal users)
+  const latencyDebugRef = useRef<{ speechEndAt?: number; transcriptAt?: number; turnAt?: number; firstAudioAt?: number }>({});
 
   // Live HUD metrics
   const [teacherTalkMs, setTeacherTalkMs] = useState(0);
@@ -462,7 +481,7 @@ export function LiveRoom({
         }
       }
     } catch {
-      setMicError(lang === "en" ? "Microphone access denied. Please grant permission." : "تعذر الوصول للمايكروفون. يرجى التأكد من منح الإذن في المتصفح.");
+      setMicError(lang === "en" ? "Microphone access denied. Please grant permission." : "تعذّر الوصول إلى الميكروفون. يُرجى التأكد من منح الإذن في المتصفح.");
     }
   }, [recording, processing, lang]);
 
@@ -483,16 +502,29 @@ export function LiveRoom({
     customSpeechDurationMs?: number,
     clientFallbackTranscript?: string
   ) {
-    if (isProcessingRef.current) return;
+    // A turn is already in flight: queue the latest utterance and replay it
+    // the moment the current turn finishes — consecutive speech is never lost.
+    if (isProcessingRef.current) {
+      const queued = (clientFallbackTranscript || "").trim();
+      if (queued.length >= 2) {
+        pendingUtteranceRef.current = queued;
+      }
+      return;
+    }
     isProcessingRef.current = true;
     setProcessing(true);
+    setMeetingState("processing");
+    latencyDebugRef.current = { speechEndAt: Date.now() };
 
     const speechDurationMs = customSpeechDurationMs ?? (Date.now() - recordStartRef.current);
     const blob = customBlob || (chunksRef.current.length > 0 ? new Blob(chunksRef.current, { type: "audio/webm" }) : null);
 
     if (!clientFallbackTranscript && (!blob || blob.size < 500)) {
+      // No usable speech captured → explicit MSA retry state (never silent)
       isProcessingRef.current = false;
       setProcessing(false);
+      setMeetingState("listening");
+      setMicError(isRtl ? "تعذّر فهم الصوت. يُرجى المحاولة مرة أخرى." : "Could not understand the audio. Please try again.");
       return;
     }
 
@@ -585,6 +617,7 @@ export function LiveRoom({
       }
       lastSubmittedTeacherTextRef.current = teacherText;
       lastSubmittedTimeRef.current = now;
+      latencyDebugRef.current.transcriptAt = Date.now();
 
       // Update live preview banner with confirmed teacher text so it stays displayed and matches chat 100%
       setLiveTranscriptPreview(teacherText);
@@ -606,13 +639,24 @@ export function LiveRoom({
         }),
       });
       const turnJson = await safeJson(turnRes);
+      latencyDebugRef.current.turnAt = Date.now();
       if (!turnRes.ok) {
-        const msg = turnJson.error || (lang === "en" ? "Turn processing error" : "حصل خطأ أثناء معالجة الكلام");
+        const msg = turnJson.error || (lang === "en" ? "Turn processing error" : "حدث خطأ مؤقت أثناء معالجة الرد");
         setMicError(turnJson.debug ? `${msg} (${turnJson.debug})` : String(msg));
+        setMeetingState("listening");
         return;
       }
 
+      setMeetingState("responding");
       setTeacherTalkMs((prev) => prev + speechDurationMs);
+      // Speaker routing feedback: when the teacher explicitly addressed one
+      // character, the log shows WHO was routed to (persistent identity).
+      if (turnJson.routing?.explicitlyAddressed && turnJson.routing?.targetName) {
+        addEvent(
+          isRtl ? `توجيه السؤال إلى: ${turnJson.routing.targetName}` : `Routed to: ${turnJson.routing.targetName}`,
+          "system"
+        );
+      }
       setQuestionCounts((prev) =>
         turnJson.questionType === "open"
           ? { ...prev, open: prev.open + 1 }
@@ -670,16 +714,29 @@ export function LiveRoom({
             if (s.audioBase64) {
               audioUrl = s.audioBase64;
             } else {
-              // 2. FALLBACK PATH: Call /api/tts
+              // 2. FALLBACK PATH: Call /api/tts — with the character's
+              // avatar key so the backend picks the character's own voice.
+              const stIdentity = studentsRef.current.find((st) => st.personaId === s.personaId);
               const ttsRes = await fetch("/api/tts", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: s.text, personaName: s.name, dialect: dialect || undefined }),
+                body: JSON.stringify({
+                  text: s.text,
+                  personaName: s.name,
+                  dialect: dialect || undefined,
+                  avatarKey: stIdentity?.avatarKey ?? undefined,
+                }),
               });
               if (ttsRes.ok) {
                 const audioBlob = await ttsRes.blob();
                 audioUrl = URL.createObjectURL(audioBlob);
                 shouldRevoke = true;
+              } else {
+                // TTS failed on BOTH paths → explicit MSA state, never silent
+                addEvent(
+                  isRtl ? "تعذّر تشغيل الصوت. يُرجى المحاولة مرة أخرى." : "Audio playback failed. Please try again.",
+                  "system"
+                );
               }
             }
 
@@ -693,29 +750,60 @@ export function LiveRoom({
                 }
               };
 
-              // Wait until student finishes speaking completely before proceeding
+              // Wait until student finishes speaking completely before proceeding.
+              // BARGE-IN: the VAD watcher may call activeAudioFinishRef to stop
+              // playback instantly when the teacher starts speaking.
               await new Promise<void>((resolve) => {
-                const finish = () => {
+                let settled = false;
+                const finish = (interrupted = false) => {
+                  if (settled) return;
+                  settled = true;
                   setSpeakingPersonaId(null);
                   speakingPersonaIdRef.current = null;
                   setActiveSpeakingAudio(null);
+                  activeAudioFinishRef.current = null;
+                  playbackStartedAtRef.current = 0;
                   if (shouldRevoke) {
                     URL.revokeObjectURL(audioUrl);
+                  }
+                  if (interrupted) {
+                    try { audio.pause(); } catch {}
+                    addEvent(
+                      isRtl ? "تمت مقاطعة الطالب — يستمع الفصل إليك الآن." : "Student interrupted — the class is listening to you.",
+                      "system"
+                    );
                   }
                   resolve();
                 };
 
-                audio.onended = finish;
-                audio.onerror = finish;
+                audio.onended = () => finish(false);
+                audio.onerror = () => finish(false);
 
                 // CRITICAL: Activate speaking state only when audio playback actually starts!
                 audio.onplay = () => {
                   setSpeakingPersonaId(s.personaId);
                   speakingPersonaIdRef.current = s.personaId;
                   setActiveSpeakingAudio(audio);
+                  setMeetingState("speaking");
+                  playbackStartedAtRef.current = Date.now();
+                  bargeInVoiceSinceRef.current = null;
+                  // Expose the finish for barge-in interruption
+                  activeAudioFinishRef.current = () => finish(true);
+                  if (latencyDebugRef.current && !latencyDebugRef.current.firstAudioAt) {
+                    latencyDebugRef.current.firstAudioAt = Date.now();
+                    const L = latencyDebugRef.current;
+                    if (process.env.NEXT_PUBLIC_DEBUG_LATENCY === "1") {
+                      console.debug(
+                        `[Latency] speechEnd→transcript ${((L.transcriptAt ?? 0) - (L.speechEndAt ?? 0))}ms | ` +
+                          `transcript→turn ${((L.turnAt ?? 0) - (L.transcriptAt ?? 0))}ms | ` +
+                          `turn→firstAudio ${((L.firstAudioAt ?? 0) - (L.turnAt ?? 0))}ms | ` +
+                          `total ${(L.firstAudioAt ?? 0) - (L.speechEndAt ?? 0)}ms`
+                      );
+                    }
+                  }
                 };
 
-                audio.play().catch(finish);
+                audio.play().catch(() => finish(false));
               });
 
               // Natural conversational breath pause (200ms)
@@ -760,22 +848,41 @@ export function LiveRoom({
           );
         }
       }
+
+      // NO SILENT TURNS: when the turn completed but no student spoke (the
+      // classroom stayed silent during an explanation), the teacher still
+      // gets explicit MSA feedback that the utterance was processed.
+      const anyStudentSpoke = (turnJson.students as TurnStudent[]).some((st) => st.text);
+      if (!anyStudentSpoke) {
+        addEvent(
+          isRtl ? "أنصت الطلاب إلى كلامك بهدوء." : "The students listened attentively.",
+          "system"
+        );
+      }
     } catch (err) {
       console.error("Recording turn processing crashed:", err);
       setMicError(
         lang === "en"
           ? "Network connection error. Please try speaking again."
-          : "حصل خطأ في الاتصال بالخادم. جرب التحدث مرة أخرى."
+          : "حدث خطأ في الاتصال بالخادم. يُرجى المحاولة مرة أخرى."
       );
     } finally {
       isProcessingRef.current = false;
       setProcessing(false);
       setIsTranscriptProcessing(false);
       setLiveTranscriptPreview("");
+      setMeetingState(isLiveOpenMicRef.current && !isTeacherMutedRef.current ? "listening" : "idle");
       if (isLiveOpenMicRef.current && !isTeacherMutedRef.current) {
         setTimeout(() => {
           restartSpeechRecognitionRef.current?.();
-        }, 120);
+          // Replay the utterance that arrived while this turn was processing
+          // — consecutive turns are never silently ignored.
+          const pending = pendingUtteranceRef.current;
+          pendingUtteranceRef.current = null;
+          if (pending && pending.trim().length >= 2) {
+            void handleRecordingComplete(undefined, 900, pending);
+          }
+        }, 150);
       }
     }
   }
@@ -1124,12 +1231,49 @@ export function LiveRoom({
       if (vadIntervalRef.current) clearInterval(vadIntervalRef.current);
 
       vadIntervalRef.current = setInterval(() => {
-        // Pause VAD while student is speaking, turn is processing, or teacher muted
+        // ---- BARGE-IN WATCH ----
+        // While a student is speaking the normal turn pipeline is paused,
+        // but the microphone KEEPS MONITORING: if the teacher starts speaking
+        // (sustained voice well above the ambient floor, past a short grace
+        // window so playback echo can't trigger it), the student's audio
+        // stops instantly and the room returns to LISTENING.
+        if (
+          isLiveOpenMicRef.current &&
+          !isTeacherMutedRef.current &&
+          !isProcessingRef.current &&
+          speakingPersonaIdRef.current !== null
+        ) {
+          analyser.getByteFrequencyData(dataArray);
+          let speechSum = 0;
+          const speechBinsCount = Math.min(bufferLength, 28);
+          for (let i = 1; i < speechBinsCount; i++) {
+            speechSum += dataArray[i];
+          }
+          const speechAverage = speechSum / Math.max(1, speechBinsCount - 1);
+          const interruptThreshold = Math.max(30, ambientNoiseFloor + 14);
+          const now = Date.now();
+          const graceMs = 700; // ignore the first moments of playback (echo)
+          const sincePlaybackStart = playbackStartedAtRef.current ? now - playbackStartedAtRef.current : Infinity;
+
+          if (speechAverage > interruptThreshold && sincePlaybackStart > graceMs) {
+            if (bargeInVoiceSinceRef.current === null) {
+              bargeInVoiceSinceRef.current = now;
+            } else if (now - bargeInVoiceSinceRef.current >= 350) {
+              // Sustained teacher voice → INTERRUPT the student mid-speech
+              bargeInVoiceSinceRef.current = null;
+              activeAudioFinishRef.current?.();
+            }
+          } else {
+            bargeInVoiceSinceRef.current = null;
+          }
+          return;
+        }
+
+        // Pause VAD while a turn is processing or the teacher is muted
         if (
           !isLiveOpenMicRef.current ||
           isTeacherMutedRef.current ||
-          isProcessingRef.current ||
-          speakingPersonaIdRef.current !== null
+          isProcessingRef.current
         ) {
           setIsTeacherSpeaking(false);
           if (isUtteranceRecordingRef.current) {
@@ -1219,10 +1363,18 @@ export function LiveRoom({
             // Adaptive natural pause:
             const hasAccumulatedText = nativeTranscriptAccumulatorRef.current.trim().length >= 2;
             const currentAccText = nativeTranscriptAccumulatorRef.current.trim();
+            // Fast commit when the utterance looks like a question or a
+            // direct call to a student — works for BOTH classrooms because
+            // the student names come from the live session roster.
+            const rosterNames = studentsRef.current
+              .map((st) => st.name)
+              .filter(Boolean)
+              .join("|");
             const isQuestionOrCall =
-              /(?:[؟?]|ليه|إيه|ايه|إزاي|ازاي|مين|هل|متى|أين|اين|كام|كم|فين|يا\s*(?:سارة|عمر|ياسين|نور|ولاد|شباب|جماعة|شطار)|جاوب|قول|شاركونا|شاركينا|تفضلي|اتفضلي|اتفضل|تفضل)\b/i.test(
-                currentAccText
-              );
+              new RegExp(
+                `(?:[؟?]|ليه|إيه|ايه|إزاي|ازاي|مين|هل|متى|أين|اين|كام|كم|فين|يا\s*(?:${rosterNames || "طلاب|شباب|جماعة"}|ولاد|شباب|جماعة|شطار)|جاوب|قول|شاركونا|شاركينا|تفضلي|اتفضلي|اتفضل|تفضل)\b`,
+                "i"
+              ).test(currentAccText);
             const effectiveSilenceMs = isQuestionOrCall ? 1200 : hasAccumulatedText ? 2000 : 2200;
             const minSpeechMs = hasAccumulatedText ? 200 : 350;
 
@@ -1337,6 +1489,7 @@ export function LiveRoom({
 
       openMicStreamRef.current = stream;
       setIsLiveOpenMic(true);
+    setMeetingState("listening");
       isLiveOpenMicRef.current = true;
       setIsTeacherMuted(false);
       isTeacherMutedRef.current = false;
@@ -1352,7 +1505,7 @@ export function LiveRoom({
       setMicError(
         isPermissionDenied
           ? (lang === "en" ? "Microphone permission denied. Please allow microphone in site settings." : "تم رفض إذن المايكروفون. يرجى السماح بالوصول للمايكروفون من إعدادات المتصفح.")
-          : (lang === "en" ? "Microphone access denied. Please grant permission." : "تعذر الوصول للمايكروفون. يرجى التأكد من منح الإذن في المتصفح.")
+          : (lang === "en" ? "Microphone access denied. Please grant permission." : "تعذّر الوصول إلى الميكروفون. يُرجى التأكد من منح الإذن في المتصفح.")
       );
     }
   }, [processing, lang, setupVad, startUtteranceRecording]);
@@ -1763,6 +1916,7 @@ export function LiveRoom({
                   name={s.name}
                   age={s.age}
                   attention={s.attention}
+                  avatarKey={s.avatarKey}
                   state={s.state}
                   isSpeaking={isSpeaking}
                   audioElement={isSpeaking ? activeSpeakingAudio : null}
@@ -1778,8 +1932,64 @@ export function LiveRoom({
             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
               <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-2xl bg-gradient-to-r from-[#12B8C4]/15 to-[#0ea5e9]/15 border border-[#12B8C4]/25 text-[#12B8C4] text-[11px] sm:text-xs font-bold shadow-sm backdrop-blur-md">
                 <span className={`w-2 h-2 rounded-full ${isLiveOpenMic && !isTeacherMuted ? "bg-emerald-400 animate-ping" : "bg-emerald-400"}`} />
-                <span className="hidden sm:inline">{isRtl ? "حصة حية تفاعلية (مايك مفتوح)" : "Live Open Mic"}</span>
-                <span className="sm:hidden">{isRtl ? "مايك مفتوح" : "Open Mic"}</span>
+                <span className="hidden sm:inline">{isRtl ? "حصة تفاعلية مباشرة (الميكروفون مفتوح)" : "Live Open Mic"}</span>
+                <span className="sm:hidden">{isRtl ? "ميكروفون مفتوح" : "Open Mic"}</span>
+              </div>
+
+              {/* Conversational State Machine Indicator (MSA — production fix) */}
+              <div
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-[11px] sm:text-xs font-semibold backdrop-blur-md shadow-sm transition-colors"
+                aria-live="polite"
+                style={{
+                  background:
+                    meetingState === "processing" || meetingState === "responding"
+                      ? "rgba(245,158,11,0.12)"
+                      : meetingState === "speaking"
+                      ? "rgba(18,184,196,0.12)"
+                      : "rgba(16,185,129,0.10)",
+                  borderColor:
+                    meetingState === "processing" || meetingState === "responding"
+                      ? "rgba(245,158,11,0.35)"
+                      : meetingState === "speaking"
+                      ? "rgba(18,184,196,0.4)"
+                      : "rgba(16,185,129,0.3)",
+                  color:
+                    meetingState === "processing" || meetingState === "responding"
+                      ? "#FBBF24"
+                      : meetingState === "speaking"
+                      ? "#12B8C4"
+                      : "#34D399",
+                }}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    meetingState === "processing" || meetingState === "responding" || meetingState === "speaking"
+                      ? "animate-pulse"
+                      : ""
+                  }`}
+                  style={{ background: "currentColor" }}
+                />
+                <span>
+                  {isRtl
+                    ? meetingState === "idle"
+                      ? "جاهز للبدء"
+                      : meetingState === "listening"
+                      ? "الفصل يستمع إليك"
+                      : meetingState === "processing"
+                      ? "جارٍ معالجة ردّك..."
+                      : meetingState === "responding"
+                      ? "يجهّز الطلاب ردودهم..."
+                      : "الطالب يتحدث — يمكنك المقاطعة"
+                    : meetingState === "idle"
+                    ? "Ready"
+                    : meetingState === "listening"
+                    ? "The class is listening"
+                    : meetingState === "processing"
+                    ? "Processing your reply..."
+                    : meetingState === "responding"
+                    ? "Students are preparing replies..."
+                    : "Student speaking — you can interrupt"}
+                </span>
               </div>
 
               {/* Subject Language Selector Dropdown */}

@@ -1,0 +1,685 @@
+▲ Next.js 16.3.3
+- Local:         http://localhost:3100
+- Network:       http://21.0.4.81:3100
+✓ Ready in 104ms
+✓ Running next.config.ts took 37ms
+session_students insert failed: {
+  message: 'new row violates row-level security policy',
+  code: '42501'
+}
+Failed to generate speech for candidate student ريم: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:22 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=Jxl836lwzBqAieIpv6bUEigqtJrDbxDXm1vGfiT7KI4-1791232642.0705764-1.0.1.1-5fR4pa3YCO0LCnrzPt9d3qpWCnZjuRNlxHwKC_PYtUnX3lbAaLip_kzIguBByvF.l2RoHWhTINyoQLhael.3uJhEjY8wd8IzbWnmuB1_8fLr6QEyJIfzduUtAuB5APpM; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:22 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f394ce92584fd-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student سلطان: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:27 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=JgHUyd2iqSNcXuL66MLgFdkUxaGcaT1xLw9kSzV9zcM-1791232647.5201979-1.0.1.1-MJCLUehBb_Xw59sfOXJ.YmDHRR74mnztqvLGEi1FWjc1YTmHRXfNM9mmD2Zge6dYeiI8bXQCKk._kikP9uVz64eIuc1ZfrgPvT8PeDk4cRTsO.YRPyY.Be7lDfPGBVJq; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:27 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f396efc0c5ea6-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:27 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=GT_ryoHgFXubEPwZYARUIV7Mni3t_ajt1G8xvd3qN4U-1791232647.5213258-1.0.1.1-YyP.ADjGhH4YWTVi_Z2RO0ji.pjtZFQCa7NW7N7LieveMPbmJa0gi.9coRXwlQw4pE96YfcUBIBDk2ZAtRT9YJDU7XfHWoqAtk6XB0N9h1KtxU6lXuHhcsgot2WOyTlL; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:27 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f396f0c430962-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student سلطان: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:30 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=VfO3uRVCr.cfKDVFpX9NYvIIxM9QXD0dCr7un2OaIec-1791232650.963494-1.0.1.1-uuXa8dIjEzTJzlqL0y1M8R5YpzxzD6tjeNB_KpdA1q72dtcUzzAim6EDxdgKM9WCpcUC3vfaRUqUeZqnBRwGU7kmQA78TuhU2cXqn5ZDqgYVdYMeOZYhl0wyzL0kdHcu; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:30 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f39848a3b0962-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+All LLM providers failed for session report, constructing robust analytical report: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async r (.next/server/chunks/[root-of-the-server]__0nog_17._.js:61:53)
+    at async i (.next/server/chunks/_0rma0p1._.js:1:3806)
+    at async s (.next/server/chunks/_0rma0p1._.js:1:197) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:35 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=fejOgZ_r6jv0PYeqw10RTKzzzmGh4il06Z5xyh.URj4-1791232655.2469141-1.0.1.1-iNQvYwKGTRse_mJztWZi2y9H4nvr1tVwTldJ6cQLKzeAR1qRq9qgrfG94FNeL6k_mY1qXkWCifpSZ9bBBleI8wI2RXbCmsTjExV2Q5FnyQOuYDqhHZ_nHoes0zG9T9J2; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:35 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f399f4f3f383f-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+session_students insert failed: {
+  message: 'new row violates row-level security policy',
+  code: '42501'
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:50 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=tbYB6S6ReV_teKnZkqkcTf3UV15zIC_QerEraQQwhPs-1791232670.313196-1.0.1.1-AyZ4vh49M_SsR2VGTO6YLJRzgI3.dFCw_vuUiiXOFR8Z8oRFRkgunTpHp72Waq.0AWJc2wXAMlUffw_vbhfcyxNJvSXMS7ySNjoSBj7UU2h8TooYtDQIjPiBnUt0QiwU; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:50 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f39fd7d15d84a-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:53 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=MTABlMZLk.DYhG9NFbJuO5HhcpEM8qO3vMFsmcUPT6k-1791232673.7774231-1.0.1.1-XdEpBZWuZc6CNGqSIUqAU5rs.JTXsc1R79VS8t7IKuqYtK_hieGlbfImq3uFBv7oF61bLsfQiAJhA4rSKOuh0IqL1__w1yC9hFtg_KTVosjn66E_.YecUfKPXoeainLy; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:53 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a131f56d84a-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student سلطان: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:53 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=ZSIfDiDqNZ.ybmXySR5SOpj33wEu7Yz9LNicMmgGAus-1791232673.7962523-1.0.1.1-6fMWFiW7x.HbSt2hpBtgFPJrt7DLSkKPteb8q78CrefHQIqgt61qrxVVFywxzcdRmnzxK_LbxqQXFqQbpkgLGWfuMhmLZly7UD2qjKMB_e.DFYyHJ1Hs66a4lLK8seIH; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:53 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a133d59104f-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:56 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=XIa_Lsh3T8OzAUsvxsMpnFIzKRw5A.A5TxzXZA5vwm8-1791232676.0562203-1.0.1.1-zQRRXC4IsuE0Q0oIpto_JMthaK9a0PnNfSHBinPrjS5ZNUZRqse_lV1IAZ9p6gTBN_E5JubzvjQ9p4tE6OkB4l2TXKYgruCelM1IoSvOQBpDLltOpblqYXC3pVMGTp14; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:56 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a215c37d84a-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student ريم: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:56 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=4_CAYGKt8eNB0oyhJ.U6appQN1YCkYEF48ct8HCYjGM-1791232676.0579674-1.0.1.1-yO3N7MhaR6pf9krc5kf0TaGCPL8mmquzgz3OOBM8WYcfP5jks8OzpNC96NPbr.oByE8.xsUJNSg9lhn0WMFAp4PKBS5awjJi2d4N0lgzIphQS1j_V6G.UQ_WGgsV_oeq; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:56 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a215c56104f-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:59 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=iQ3VT3JDJA87FRWNWO8NUrPrN_nWUmJnU39P5D4L6oc-1791232679.9392343-1.0.1.1-hCxCtyDMlQr5d03_Wkkd.aIb13O1U8FO1S9xm0keZb0DVUjJ0aDWZS.iqtlYRUIL1mIrS8XLow_1Jd5q4a_8b_IBXbxqpEZdn8x3PwOi3bRDVUgBM3C3x2JfFjYDEWth; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:59 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a399ac9d84a-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student فهد: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:37:59 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=eo3I7ZoMjRwFt_.iQ7djyJo7znkWJ1XobqTa1wX8QsE-1791232679.941443-1.0.1.1-HWag69noPqQwnN5mduMWu6JuqSNdSvj7fvplwetPkYdvsI3H7xA6GCUGvN6AlIMJGYyVAZvkpqWd3ROP3gPelIuuZ8w8tmsJimsn7.DkySTnaeJqHXf_lptcyWyHkw5J; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:07:59 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a399fe1104f-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student فهد: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:03 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=WcY0eRnxeUa5M1dYAmsnQ79L12n20f2adOW2CGEpbAM-1791232683.537883-1.0.1.1-kQVzVgJZWEyu91bcPUkvuUwfv.BF7Mi4qytab_9smcKjYihTgCn1ft5rcLG2qfS1lDn_gwpRPeIv3mjkAz7UJy3K9FBIHtq9o_kmkkUTrO4NFCq.8zsWv3lDOcafvSCu; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:03 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a501804d84a-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student فهد: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:06 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=_5t_gcW4LqwSgAXvVPBh0jt3Ltq5nfgV4wWvpZlZCmo-1791232686.0155182-1.0.1.1-TkMXco6KLQQ6meMVJxPZFRLQiy8w6KJJ5QAkbq2juTr9EOJeJmBqtG_z9dxeKQ_L.IgA4bsGaFm6ZweO83xuAb4VMriz3kW61dy6bkzPXsk0_cHyllIu1lBb8hp0X0UZ; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:06 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3a5f9d02d84a-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+All LLM providers failed for session report, constructing robust analytical report: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async r (.next/server/chunks/[root-of-the-server]__0nog_17._.js:61:53)
+    at async i (.next/server/chunks/_0rma0p1._.js:1:3806)
+    at async s (.next/server/chunks/_0rma0p1._.js:1:197) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:18 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=KoszZ4AGvWigLOyXIh9G4DLfT0DuTpjX2uZrHp2roHY-1791232698.4086037-1.0.1.1-XAUYWak3DtIjMP3xbw68mskqKyDAA4plXO46MznYsgXrXDfHbbFp01MubNMkikJiol0eHSV5XP22F575kGulgc9jIIK7dNG9wS11ine49X7bs4NL5f87moaNKpISNspt; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:18 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3aad0bd61099-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+session_students insert failed: {
+  message: 'new row violates row-level security policy',
+  code: '42501'
+}
+session_students insert failed: {
+  message: 'new row violates row-level security policy',
+  code: '42501'
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:45 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=biok3ySfEzbw65r9MnNMpFFYJkOETHo2_CNjDyOaCo8-1791232725.8724077-1.0.1.1-Pzea3t2m02qyQMyHt6BVFAwuQDdjdDNIgasqKg4tvBIS0Y76OlATIzF.LyJ8s3an5SHbvN5l18RTPrc4Dy88GyqyYTZuXysUblOOmWIYsd6jbPxvS5qDwTLCM7QvBijk; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:45 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3b58be62bcca-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student عمر: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:49 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=z6XdXNFNnMgNsbuI9xxOqQoz6JfTLltWrFlaJ7c9c7Q-1791232729.4215913-1.0.1.1-AgHSyVrPLlV.1vhIIo0UvymWAuhuqgAdxFBK26qxFeYHf_rNGugLK9PWTKhfKjeLhnnnJ0zmkZJg6IhZB_RlH1i6tXV5bua3fk3DEJUzxSpYF5WUd6z4Ue9SBMdBCQxi; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:49 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3b6ee89cbcca-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:53 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=df4oqaWf4nzK9W87PxLloo6RdLZtmzAcTqcwfOTk7lo-1791232733.0427418-1.0.1.1-ONlfNWoCLvOxjQF_lv2qmiccWFfmgpdSRIkqoBOqiKe_G4adD6tiE4HEChGrsKr92iUV_7nOW7HxHFuuJ6SCVP62Au1U4xYbxq6hX84xfeyOO.9rmYS8rTyzFdjIOFQr; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:53 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3b858e0fbcca-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:55 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=Blq13.loMRT6FBbSmg18KjfP5VzvcQUbrxAnRLIrCmI-1791232735.440715-1.0.1.1-UAkQURdVL1Or1mr9K03Oqk9ovOOg0KqpbljO0rqec2w_4mTmPz0AD5i5OzTMkhUykSpKVyxLOJ_vkeRE0l1OAI1SDiIfZ1kL3MUGwURzAggz5AIGi9uPJgQDeVu17qDK; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:55 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3b947a0bbcca-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student فهد: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:38:55 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=ZppOAA6ZunPQ4tQ5ZuB.v_jeBZLnYxvMjEa6dFfWI3o-1791232735.4574456-1.0.1.1-xq0hqZoiNGoRC.16MGPeo4AQ6veWYXti2xUrYknPaY_o64NJziirtkNT3Eq0on96YCJ4PlT137XdxA_9V.Q95x2i7KMtKY6ZcIG62.ruLFyAl_se_dv3yz1Zrj24cl7_; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:08:55 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3b949e8b852c-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+All LLM providers failed for session report, constructing robust analytical report: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async r (.next/server/chunks/[root-of-the-server]__0nog_17._.js:61:53)
+    at async i (.next/server/chunks/_0rma0p1._.js:1:3806)
+    at async s (.next/server/chunks/_0rma0p1._.js:1:197) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:39:07 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=Ghumm4rKt._NkEBnrKJqOnGDiFKnnlaLF0EYO21xlio-1791232747.6894548-1.0.1.1-jQJybMSbtY_sVs3niSVZmH8D9q4MRqDSi4iW8Wt_abmOWd8ET8vHCFgK7Qf50GCXFyNQDC7VkMc2O9Yx5bg6Ge6UpiZ6fmcbTQu8gg.Jnpv4F9pTE6tWKRvR05MGV2by; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:09:07 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f3be1088186b1-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+session_students insert failed: {
+  message: 'new row violates row-level security policy',
+  code: '42501'
+}
+Classify question with allam-2-7b error: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async f (.next/server/chunks/_077njpn._.js:1:33112)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:44:37 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=GCpilq8ZMqxcVYHsNRmg2fYrwWB4O6i0NpllZj7gT_0-1791233077.9424083-1.0.1.1-aHdxx7ZLr8wXgsBsfGlq9xlc0A2j77wAjtegQ7yAipDwJ5AujyKlwZrDbxjTikiY1nXfiIiceIbf9DRfgwqNy9zZgF5rND2KEJm5.i47wBZqRz8E8LtOD4KV6uM5e8r3; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:14:37 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f43f12d0cbc26-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Failed to generate speech for candidate student سلطان: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async X (.next/server/chunks/_077njpn._.js:232:14)
+    at async v (.next/server/chunks/_077njpn._.js:232:602)
+    at async N (.next/server/chunks/_077njpn._.js:232:47793)
+    at async x (.next/server/chunks/_077njpn._.js:232:15403) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:45:29 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=XdMrEVAU4SThqCYWem33P0PdPlgx99cMX4VSDUKoQoA-1791233129.5917757-1.0.1.1-MOHNDbtQOIuIajtEzxpPk_J0Etq0rwbESBt6cHOtngwahWr3xaY4kFtr22J51YONHdoTvGq495kQ2B71Jk66PXrJIyzgV2DT1YTd1q13x6wtB1I_GnS27jfdtvou61ou; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:15:29 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f4533eacd0ee0-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+All LLM providers failed for session report, constructing robust analytical report: Error: 403 {"error":{"message":"Forbidden"}}
+    at w.generate (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:1:1956)
+    at eq.makeStatusError (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:10859)
+    at eq.makeRequest (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:13770)
+    at async eC (.next/server/chunks/src_lib_ai_groq_ts_02cfjrc._.js:4:20191)
+    at async r (.next/server/chunks/[root-of-the-server]__0nog_17._.js:61:53)
+    at async i (.next/server/chunks/_0rma0p1._.js:1:3806)
+    at async s (.next/server/chunks/_0rma0p1._.js:1:197) {
+  status: 403,
+  headers: Headers {
+    date: 'Mon, 05 Oct 2026 20:46:03 GMT',
+    'content-type': 'application/json',
+    'content-length': '33',
+    connection: 'keep-alive',
+    'cache-control': 'private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0',
+    expires: 'Thu, 01 Jan 1970 00:00:01 GMT',
+    'referrer-policy': 'same-origin',
+    'x-frame-options': 'SAMEORIGIN',
+    'strict-transport-security': 'max-age=15552000',
+    vary: 'accept-encoding',
+    'set-cookie': '__cf_bm=khWFr9s1ppIdGZhq.._MhjodWCxGiEZzc5SihAUWWNQ-1791233163.299041-1.0.1.1-95SM_rvZ_9P78QXvn.fRX4KdO5HFsl6DlUV2xVx4QDRCaS2ofOYcQgupCbY8shm2CPF6mCaACgLK1EegquOZiSlTZdPnBQIjvs_e1tQKO0MDBmiYA8Bz84DLzErEo5Qe; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Mon, 05 Oct 2026 21:16:03 GMT',
+    server: 'cloudflare',
+    'cf-ray': 'a45f46069d0c8503-HKG',
+    'alt-svc': 'h3=":443"; ma=86400'
+  },
+  error: { error: { message: 'Forbidden' } }
+}
+Killed

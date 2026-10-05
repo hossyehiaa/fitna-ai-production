@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     return await handleCreate(request);
   } catch (err) {
     console.error("Session creation crashed:", err);
-    return NextResponse.json({ error: "حصل خطأ أثناء إنشاء الجلسة. جرب تاني." }, { status: 500 });
+    return NextResponse.json({ error: "حدث خطأ أثناء إنشاء الجلسة. يُرجى المحاولة مرة أخرى." }, { status: 500 });
   }
 }
 
@@ -111,7 +111,7 @@ async function handleCreate(request: NextRequest) {
 
   if (sessionError || !session) {
     console.error("Session creation failed:", sessionError);
-    return NextResponse.json({ error: "حصل خطأ أثناء إنشاء الجلسة" }, { status: 500 });
+    return NextResponse.json({ error: "حدث خطأ أثناء إنشاء الجلسة" }, { status: 500 });
   }
 
   // Lock teacher title in session_events at ms 0 so students address the teacher accurately from turn 1
