@@ -1,0 +1,256 @@
+// =====================================================================
+// Fitna AI Production — Prisma schema (Neon PostgreSQL)
+//
+// Covers: auth & identity (users, profiles, sessions, reset tokens),
+// agent personality system, simulation conversations + messages,
+// speech settings, reports, badges, audit logs.
+//
+// Migrations: bun run db:migrate  (dev)  |  prisma migrate deploy (prod)
+// The connection string lives ONLY in DATABASE_URL (env var).
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// Identity & Authentication
+// ---------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  /// scrypt password hash (node:crypto). Never store plaintext.
+  passwordHash String
+  /// Authoritative role, validated server-side only: teacher | institution
+  role         String   @default("teacher")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile             Profile?
+  speechSettings      SpeechSettings?
+  authSessions        AuthSession[]
+  passwordResetTokens PasswordResetToken[]
+  simSessions         SimSession[]
+  badges              Badge[]
+  auditLogs           AuditLog[]
+
+  @@index([role])
+}
+
+model Profile {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName           String
+  /// Display copy of account type: teacher | institution
+  userType           String   @default("teacher")
+  /// Speech/AI dialect profile: saudi | egyptian — affects AI voice ONLY, never the UI language
+  dialect            String   @default("saudi")
+  institutionName    String?
+  onboardingComplete Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([dialect])
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 hash of the opaque session token. Raw token only lives in the HTTP-only cookie.
+  tokenHash String   @unique
+  expiresAt DateTime
+  lastSeenAt DateTime @default(now())
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------
+// Agent personality system (configurable, dialect-aware student personas)
+// ---------------------------------------------------------------------
+
+model Agent {
+  id           String   @id @default(cuid())
+  /// Stable key: sara | omar | yassin | nour | future agents
+  key          String   @unique
+  name         String
+  description  String
+  /// Free-form personality summary (Arabic, MSA) shown in UI
+  personality  String
+  /// System prompt template. {{DIALECT_BLOCK}} is injected per user dialect at runtime.
+  systemPrompt String
+  gender       String   @default("female")
+  /// 0-100 base attention level
+  baseAttention Int     @default(70)
+  /// 0-100 comprehension level
+  comprehension Int     @default(70)
+  strengths    String[] @default([])
+  weaknesses   String[] @default([])
+  enabled      Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------
+// Simulation conversations (a live classroom session = a conversation)
+// ---------------------------------------------------------------------
+
+model LessonTopic {
+  id        String   @id @default(cuid())
+  titleAr   String
+  titleEn   String?
+  isGlobal  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  sessions SimSession[]
+}
+
+model SimSession {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Dialect captured from the user profile at session start (saudi | egyptian)
+  dialect          String
+  topicId          String?
+  topic            LessonTopic? @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  lessonContext    String?
+  durationMinutes  Int       @default(15)
+  /// balanced | disruptive | disengaged
+  classroomStyle   String    @default("balanced")
+  /// socratic_focus | talk_time_reduction | inclusive_engagement | behavior_redirection
+  trainingObjective String   @default("socratic_focus")
+  /// in_progress | completed | abandoned
+  status           String    @default("in_progress")
+  startedAt        DateTime  @default(now())
+  endedAt          DateTime?
+
+  // Pedagogical telemetry
+  overallScore      Float?
+  teacherTalkRatio  Float?
+  socraticRate      Float?
+  inclusivityIndex  Float?
+  classroomPattern  String?
+
+  events  SessionEvent[]
+  report  Report?
+
+  @@index([userId, startedAt])
+  @@index([status])
+}
+
+/// One message/turn inside a conversation (teacher utterance, student reaction, system event)
+model SessionEvent {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    SimSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// teacher_utterance | student_reaction | system
+  eventType  String
+  /// teacher | agent key (sara, omar, ...) | system
+  actor      String
+  content    String
+  audioUrl   String?
+  /// Speaking style, attention state, latency etc. — never secrets.
+  metadata   Json?
+  occurredMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId, occurredMs])
+}
+
+model Report {
+  id              String   @id @default(cuid())
+  sessionId       String   @unique
+  session         SimSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  summaryAr       String
+  sessionSignalAr String
+  strengths       String[] @default([])
+  weaknesses      String[] @default([])
+  recommendations String[] @default([])
+  evidenceMoments Json?
+  frameworkScores Json?
+  /// Public share token for read-only report links
+  shareToken      String   @unique @default(cuid())
+  createdAt       DateTime @default(now())
+}
+
+model Badge {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeKey   String
+  unlockedAt DateTime @default(now())
+  sessionId  String?
+
+  @@unique([userId, badgeKey])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------
+// Speech settings (per user)
+// ---------------------------------------------------------------------
+
+model SpeechSettings {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ttsProvider    String   @default("msedge")
+  /// Optional voice override; empty = dialect default
+  ttsVoice       String?
+  ttsRate        String   @default("+0%")
+  ttsPitch       String   @default("+0Hz")
+  sttProvider    String   @default("groq")
+  language       String   @default("ar")
+  /// ar-SA | ar-EG (derived from dialect, kept for observability)
+  locale         String   @default("ar-SA")
+  /// 0.5 - 1.5
+  speakingRate   Float    @default(1.0)
+  /// relaxed | balanced | expressive
+  expressiveness String   @default("balanced")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------
+// Audit logging (security-relevant events only, no secrets, no content)
+// ---------------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// signup | login | login_failed | logout | password_change | password_reset |
+  /// account_deleted | dialect_changed | session_created | session_completed | rate_limited ...
+  action    String
+  metadata  Json?
+  ipHash    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
