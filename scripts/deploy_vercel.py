@@ -110,28 +110,33 @@ PROJECT_ID = proj["id"]
 DB_URL = os.environ["DATABASE_URL"]
 AUTH_SECRET = os.environ["AUTH_SECRET"]
 
+# This deployment manages ONLY the keys below. DATABASE_URL / AUTH_SECRET /
+# NEXT_PUBLIC_APP_URL / STT_PROVIDER already exist and stay untouched.
 env_vars = [
-    {"key": "DATABASE_URL", "value": DB_URL, "target": ["production"], "type": "encrypted"},
-    {"key": "AUTH_SECRET", "value": AUTH_SECRET, "target": ["production"], "type": "encrypted"},
-    {"key": "NEXT_PUBLIC_APP_URL", "value": "", "target": ["production"], "type": "plain"},
-    {"key": "TTS_PROVIDER", "value": "msedge", "target": ["production"], "type": "plain"},
-    {"key": "STT_PROVIDER", "value": "groq", "target": ["production"], "type": "plain"},
+    {"key": "TTS_PROVIDER", "value": "fish", "target": ["production"], "type": "plain"},
 ]
 if os.environ.get("GROQ_API_KEY"):
     env_vars.append({"key": "GROQ_API_KEY", "value": os.environ["GROQ_API_KEY"],
                      "target": ["production"], "type": "encrypted"})
+if os.environ.get("FISH_AUDIO_API_KEY"):
+    env_vars.append({"key": "FISH_AUDIO_API_KEY", "value": os.environ["FISH_AUDIO_API_KEY"],
+                     "target": ["production"], "type": "encrypted"})
 
-# Fetch existing to avoid duplicates
+# Upsert: create missing keys, update changed plain values.
 s, existing = call("GET", f"/v9/projects/{PROJECT_ID}/env?teamId={TEAM}&target=production")
-existing_keys = {e["key"] for e in existing.get("envs", [])} if s == 200 else set()
+existing_map = {e["key"]: e for e in existing.get("envs", [])} if s == 200 else {}
 
 for ev in env_vars:
-    if ev["key"] == "NEXT_PUBLIC_APP_URL":
-        continue  # set after first deploy when we know the domain
-    if ev["key"] in existing_keys:
-        continue
-    s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env?teamId={TEAM}", ev)
-    print(f"  env {ev['key']}: {'✓ set' if s in (200,201) else '✗ ' + str(res)[:120]}")
+    cur = existing_map.get(ev["key"])
+    if cur is None:
+        s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env?teamId={TEAM}", ev)
+        print(f"  env {ev['key']}: {'✓ created' if s in (200, 201) else '✗ ' + str(res)[:120]}")
+    elif ev["type"] == "plain" and cur.get("value") == ev["value"]:
+        print(f"  env {ev['key']}: unchanged")
+    else:
+        # POSTing to the env-id endpoint overwrites the stored value.
+        s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env/{cur['id']}?teamId={TEAM}", ev)
+        print(f"  env {ev['key']}: {'✓ updated' if s in (200, 201) else '✗ ' + str(res)[:120]}")
 
 # ---------------------------------------------------------------------
 # 3. Upload files

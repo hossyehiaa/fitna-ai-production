@@ -1,6 +1,14 @@
 // =====================================================================
-// Groq LLM provider — llama-3.3-70b-versatile for student reactions.
+// Groq LLM provider — student reactions with a resilient model chain.
 // Server-only. GROQ_API_KEY stays in env (never client, never logs).
+//
+// Model selection (verified against this key's /models lineup):
+//   1. GROQ_CHAT_MODEL env override (ops control)
+//   2. openai/gpt-oss-120b      — primary: strongest dialect fidelity + JSON
+//   3. qwen/qwen3.8-27b         — secondary multilingual
+//   4. allam-2-7b               — Arabic-native last resort
+// A 404 "model not available" walks down the chain; any other failure
+// (auth, network, timeout) fails fast into the deterministic fallback.
 // =====================================================================
 
 import Groq from 'groq-sdk'
@@ -9,7 +17,15 @@ import type { AgentConfig } from '@/lib/agents/registry'
 import { buildAgentSystemPrompt, fenceUserContent, DEVELOPER_RULES, conversationHistoryBlock } from './provider'
 import { parseDialect } from '@/lib/dialect/config'
 
-const CHAT_MODEL = 'llama-3.3-70b-versatile'
+/** Primary model label surfaced in health/logs (public info, not a secret). */
+export const GROQ_CHAT_MODEL_LABEL = process.env.GROQ_CHAT_MODEL || 'openai/gpt-oss-120b'
+
+const CHAT_MODEL_CHAIN: string[] = [
+  ...(process.env.GROQ_CHAT_MODEL ? [process.env.GROQ_CHAT_MODEL] : []),
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.8-27b',
+  'allam-2-7b',
+]
 
 interface ParsedStudentOutput {
   name?: string
@@ -22,6 +38,13 @@ function client(): Groq | null {
   const key = process.env.GROQ_API_KEY
   if (!key) return null
   return new Groq({ apiKey: key, timeout: 20_000, maxRetries: 1 })
+}
+
+/** Is this error a "model unavailable for this key" 404? */
+function isModelUnavailable(err: unknown): boolean {
+  const status = (err as { status?: number })?.status
+  const msg = err instanceof Error ? err.message : ''
+  return status === 404 || /does not exist or you do not have access/i.test(msg)
 }
 
 /**
@@ -47,7 +70,8 @@ ${ctx.lessonContext ? `موضوع الدرس: ${ctx.lessonContext.slice(0, 400)}
 الطلاب: ${agentList}.
 
 لكل طالب شخصيته الدائمة المحددة أدناه، وسلوك اللهجة محدد بدقة ولا يجوز خلط اللهجات أو الخروج عنها.
-أخرج مصفوفة JSON فقط، كل عنصر: {"name": "اسم الطالب بالعربية", "text": "رد الطالب (جملة أو جملتان، 3-12 كلمة)", "attention": رقم 15-100, "emotion": "attentive|hand_raised|distracted|enthusiastic|confused"}.
+اللهجة إلزامية في صياغة كل رد: استخدم ألفاظ اللهجة المحددة للطالب في نطقك اليومي الطبيعي، وتجنب تماماً ألفاظ اللهجة الأخرى المذكورة في قائمة المحظورات.
+أخرج مصفوفة JSON فقط، كل عنصر: {"name": "اسم الطالب بالعربية", "text": "رد الطالب بلهجته المحكية (جملة أو جملتان، 3-12 كلمة)", "attention": رقم 15-100, "emotion": "attentive|hand_raised|distracted|enthusiastic|confused"}.
 رّد من 2 إلى 3 طلاب فقط في هذا الدور.
 ${DEVELOPER_RULES}`
 
@@ -56,17 +80,32 @@ ${DEVELOPER_RULES}`
     .map((a) => buildAgentSystemPrompt(a, dialect))
     .join('\n\n---\n\n')
 
-  const completion = await groq.chat.completions.create({
-    model: CHAT_MODEL,
-    temperature: 0.7,
-    max_tokens: 600,
-    messages: [
-      { role: 'system', content: `${personaBlock}\n\n${systemPrompt}` },
-      { role: 'user', content: fenceUserContent(teacherText) },
-    ],
-  })
-
-  const raw = completion.choices?.[0]?.message?.content
+  let raw: string | undefined
+  for (const model of CHAT_MODEL_CHAIN) {
+    let completion: Awaited<ReturnType<Groq['chat']['completions']['create']>>
+    try {
+      completion = await groq.chat.completions.create({
+        model,
+        temperature: 0.7,
+        max_tokens: 900,
+        // gpt-oss family accepts reasoning_effort; low keeps turns snappy.
+        // Other models reject unknown params silently via extra_body — the
+        // Groq SDK passes this through as a per-request option safely.
+        ...(model.startsWith('openai/gpt-oss')
+          ? { reasoning_effort: 'low' as const }
+          : {}),
+        messages: [
+          { role: 'system', content: `${personaBlock}\n\n${systemPrompt}` },
+          { role: 'user', content: fenceUserContent(teacherText) },
+        ],
+      })
+    } catch (err) {
+      if (isModelUnavailable(err)) continue // walk down the model chain
+      throw err // auth/network/timeout — fail fast to deterministic fallback
+    }
+    raw = completion.choices?.[0]?.message?.content || undefined
+    if (raw) break // got usable content — stop walking the chain
+  }
   if (!raw) return null
 
   // Extract the JSON array defensively (models sometimes wrap in fences).

@@ -24,7 +24,7 @@ export async function GET() {
         ? 'fish-audio (+msedge fallback)'
         : 'msedge (no key required)',
       stt: process.env.GROQ_API_KEY ? 'groq-whisper' : 'not_configured',
-      ai: process.env.GROQ_API_KEY ? 'groq-llama-3.3-70b' : 'fallback_engine',
+      ai: process.env.GROQ_API_KEY ? 'groq-gpt-oss-120b' : 'fallback_engine',
     },
   }
 
