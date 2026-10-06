@@ -11,7 +11,7 @@ import {
   type TurnPlanParams,
   type QuestionType,
 } from "@/lib/ai/turn";
-import { callGroqStreamWithFallback, CHAT_MODEL } from "@/lib/ai/groq";
+import { callGroqStreamWithFallback, preloadGroqModels, groqErrorSignature } from "@/lib/ai/groq";
 import { buildCandidateStudentPrompt } from "@/lib/ai/personas";
 import { normalizeSpeechTranscription } from "@/lib/audio/speechNormalizer";
 import { synthesizeStudentSpeech, synthesizeStudentSpeechStreaming, type PersonaVoice } from "@/app/api/tts/route";
@@ -214,13 +214,18 @@ function stateLabel(state: string) {
   return "منتبه";
 }
 
-/** Warm outbound TLS pools (Fish + Groq) so the first real call skips handshakes. */
+/** Warm outbound TLS pools (Fish + Groq) so the first real call skips handshakes.
+ * Also primes the Groq model-discovery cache so chain resolution (which
+ * auto-migrates across model deprecations) costs nothing on the first turn. */
 function warmUpstreamConnections() {
   const warm = (url: string) => {
     fetch(url, { method: "HEAD", signal: AbortSignal.timeout(3000) }).catch(() => {});
   };
   if (process.env.FISH_AUDIO_API_KEY) warm("https://api.fish.audio/");
-  if (process.env.GROQ_API_KEY) warm("https://api.groq.com/");
+  if (process.env.GROQ_API_KEY) {
+    warm("https://api.groq.com/");
+    void preloadGroqModels();
+  }
 }
 
 // GET — warmup ping. The live room fires this on mount so the function,
@@ -949,7 +954,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                 try {
                   const result = await callGroqStreamWithFallback(
                     {
-                      model: CHAT_MODEL,
                       messages: [
                         { role: "system", content: plan.systemPrompt },
                         { role: "user", content: userPrompt },
@@ -999,6 +1003,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     fullRawText = extractor.text.trim() || null;
                   } else {
                     console.warn("Streaming LLM failed, engaging deterministic fallback:", llmErr);
+                    L.llmError = groqErrorSignature(llmErr); // dev-mode latency block
                     chunker.flush();
                     try {
                       await Promise.all(pendingTts);
@@ -1076,6 +1081,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           `[TurnStream:${sessionId.slice(0, 8)}] ttfa=${L.ttfaServerMs ?? "-"}ms auth=${L.authMs}ms db=${L.dbMs}ms ` +
             `wave=${L.waveCached ? "cache" : "fresh"} stt=${L.sttMs ?? "-"}ms ` +
             `route=${L.routingMs}ms llm1st=${L.llmFirstTokenMs ?? "-"}ms sent1=${L.firstSentenceMs ?? "-"}ms ` +
+            `llmErr=${L.llmError ?? "-"} ` +
             `tts0=${L.ttsFirstMs ?? "-"}ms chunks=${L.chunks ?? 0} total=${L.totalMs}ms model=${L.model ?? "fast/fallback"} ` +
             `target=${explicitTarget ? explicitTarget.name : routing.targetName ?? "-"}`
         );
