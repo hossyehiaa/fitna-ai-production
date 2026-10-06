@@ -94,6 +94,26 @@ const server = createServer((req, res) => {
 
     const reply = REPLIES[replyIndex++ % REPLIES.length];
 
+    // Mid-stream failure simulation: stream 3 word fragments, then kill
+    // the socket (forwardedDeltas > 0 ⇒ the caller must NOT walk).
+    if (process.env.MOCK_MIDSTREAM === model) {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      sse(res, { id: "mock", object: "chat.completion.chunk", model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
+      const words = reply.split(" ");
+      let i = 0;
+      const timer = setInterval(() => {
+        if (i >= 3) {
+          clearInterval(timer);
+          res.destroy();
+          return;
+        }
+        const frag = (i === 0 ? "" : " ") + words[i];
+        sse(res, { id: "mock", object: "chat.completion.chunk", model, choices: [{ index: 0, delta: { content: frag }, finish_reason: null }] });
+        i++;
+      }, 45);
+      return;
+    }
+
     if (parsed.stream) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       // initial role chunk

@@ -35,9 +35,43 @@ async function main() {
   if (!streamed.text.includes("text")) throw new Error("stream text missing JSON payload");
   if (streamed.model === "openai/gpt-oss-120b") throw new Error("chain did not walk past dead primary!");
   console.log("\n✅ chain resolution verified (dead primary walked, live model served)");
+  mainDone = true;
 }
 
-main().catch((e) => {
-  console.error("❌", e);
-  process.exit(1);
-});
+let mainDone = false;
+
+/** Mid-stream failure: forwarded deltas > 0 ⇒ must THROW, never walk. */
+async function midstreamTest() {
+  const deltas: string[] = [];
+  let threw = false;
+  try {
+    await callGroqStreamWithFallback({ messages: [{ role: "user", content: "x" }] }, (d) => deltas.push(d));
+  } catch {
+    threw = true;
+  }
+  if (!threw) throw new Error("mid-stream failure was swallowed — should have thrown!");
+  if (deltas.length === 0) throw new Error("expected partial deltas before the failure");
+  console.log(`✅ mid-stream failure threw (after ${deltas.length} deltas) instead of walking`);
+}
+
+async function runAll() {
+  await main();
+  if (mainDone) {
+    // Phase 2 only meaningful once phase 1 passed.
+  }
+}
+
+// MOCK_MIDSTREAM env is set by the runner for this phase.
+if (process.env.MOCK_MIDSTREAM) {
+  midstreamTest()
+    .then(() => console.log("\n✅ ALL PHASES PASSED"))
+    .catch((e) => {
+      console.error("❌", e);
+      process.exit(1);
+    });
+} else {
+  runAll().catch((e) => {
+    console.error("❌", e);
+    process.exit(1);
+  });
+}

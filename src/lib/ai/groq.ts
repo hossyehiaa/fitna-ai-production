@@ -162,8 +162,14 @@ function isModelUnavailable(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
   if (status === 404 || status === 403 || status === 429 || status === 503) return true;
   const msg = err instanceof Error ? err.message : "";
-  return /does not exist|not found|decommissioned|sunset|no longer (?:available|supported)|you do not have access/i.test(
-    msg
+  return (
+    /does not exist|not found|decommissioned|sunset|no longer (?:available|supported)|you do not have access/i.test(
+      msg
+    ) ||
+    // Groq structured-output generation failure — next model gets a fresh
+    // chance (observed in production 2026-10: gpt-oss json_object mode can
+    // fail per-prompt even though the model itself is healthy).
+    /failed to generate json/i.test(msg)
   );
 }
 
@@ -227,11 +233,13 @@ export async function callGroqStreamWithFallback(
   params: ChatParams,
   onDelta: (textDelta: string) => void,
   options?: { signal?: AbortSignal }
-): Promise<{ text: string; model: string }> {
+): Promise<{ text: string; model: string; attempts?: string[] }> {
   const chain = await resolveChatChain();
   let lastError: unknown = null;
+  const attempts: string[] = [];
 
   for (const model of chain) {
+    let forwardedDeltas = 0; // tokens already handed to the caller's pipeline
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stream: any = await groq.chat.completions.create(
@@ -253,6 +261,7 @@ export async function callGroqStreamWithFallback(
         const delta = chunk?.choices?.[0]?.delta?.content;
         if (typeof delta === "string" && delta.length > 0) {
           text += delta;
+          forwardedDeltas += 1;
           onDelta(delta);
         }
         if (options?.signal?.aborted) {
@@ -260,7 +269,7 @@ export async function callGroqStreamWithFallback(
           throw new DOMException("Aborted", "AbortError");
         }
       }
-      return { text, model };
+      return { text, model, attempts };
     } catch (err: unknown) {
       lastError = err;
       if (options?.signal?.aborted) throw err;
@@ -268,6 +277,14 @@ export async function callGroqStreamWithFallback(
       if (isModelUnavailable(err)) {
         const status = (err as { status?: number })?.status;
         const msg = String((err as { message?: string })?.message ?? "");
+        // WALK SAFETY: once ANY content token has been forwarded the
+        // caller's extractor/chunker/TTS pipeline holds user-visible
+        // state — restarting with another model would duplicate text.
+        // Fail instead; the route salvages the partial reply.
+        if (forwardedDeltas > 0) {
+          throw err;
+        }
+        attempts.push(`${model}→${status ?? "?"}:${msg.slice(0, 60)}`);
         console.warn(`Groq stream model ${model} failed (${status}: ${msg.slice(0, 120)}), trying next fallback model...`);
         continue;
       }

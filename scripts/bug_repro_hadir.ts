@@ -140,7 +140,8 @@ async function main() {
     for (const s of speech) replies.push(String(s.fullText));
     console.log(
       `T${i + 1} [${q.session}] target=${meta?.routing?.targetName ?? "-"}${routeOk ? "" : " MISMATCH!"} ` +
-        `model=${model} llm1st=${done?.latency?.llmFirstTokenMs ?? "-"}ms total=${out.totalMs}ms`
+        `model=${model} llm1st=${done?.latency?.llmFirstTokenMs ?? "-"}ms total=${out.totalMs}ms` +
+        (done?.latency?.llmError ? ` llmError=${done.latency.llmError}` : "")
     );
     for (const s of speech) console.log(`   → ${s.name}: ${s.fullText}`);
     for (const w of warns) console.log(`   ⚠ ${w.type}: ${w.error}`);

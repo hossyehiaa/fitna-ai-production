@@ -979,6 +979,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     { signal: abortSignal }
                   );
                   L.model = result.model;
+                  if (result.attempts && result.attempts.length > 0) L.llmWalk = result.attempts;
                   chunker.flush();
                   await Promise.all(pendingTts);
 
@@ -1008,7 +1009,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     try {
                       await Promise.all(pendingTts);
                     } catch {}
-                    fullRawText = null;
+                    // SALVAGE: if tokens already streamed out of a failed
+                    // attempt (mid-stream provider failure), keep whatever
+                    // complete text the extractor decoded — the student's
+                    // answer beats a canned fallback line.
+                    const salvaged = extractor.text.trim();
+                    fullRawText = salvaged.length >= 3 ? salvaged : null;
                   }
                 }
 
@@ -1081,7 +1087,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           `[TurnStream:${sessionId.slice(0, 8)}] ttfa=${L.ttfaServerMs ?? "-"}ms auth=${L.authMs}ms db=${L.dbMs}ms ` +
             `wave=${L.waveCached ? "cache" : "fresh"} stt=${L.sttMs ?? "-"}ms ` +
             `route=${L.routingMs}ms llm1st=${L.llmFirstTokenMs ?? "-"}ms sent1=${L.firstSentenceMs ?? "-"}ms ` +
-            `llmErr=${L.llmError ?? "-"} ` +
+            `llmErr=${L.llmError ?? "-"} llmWalk=${L.llmWalk ? JSON.stringify(L.llmWalk) : "-"} ` +
             `tts0=${L.ttsFirstMs ?? "-"}ms chunks=${L.chunks ?? 0} total=${L.totalMs}ms model=${L.model ?? "fast/fallback"} ` +
             `target=${explicitTarget ? explicitTarget.name : routing.targetName ?? "-"}`
         );
