@@ -38,6 +38,11 @@ const BASE = process.env.E2E_BASE_URL || "https://fitna-ai-production.vercel.app
 const IS_LOCAL = BASE.includes("localhost") || BASE.includes("127.0.0.1");
 // MINI mode: rehearse with the first N turns only (e.g. MINI_TURNS=2).
 const MINI = parseInt(process.env.MINI_TURNS || "0", 10) || 0;
+// CHUNK mode: run turns [OFFSET, OFFSET+COUNT) — lets the full 20-turn
+// acceptance run inside bounded tool windows (the sandbox reaps detached
+// background processes, so one long run is not survivable).
+const OFFSET = parseInt(process.env.TURN_OFFSET || "0", 10) || 0;
+const COUNT = parseInt(process.env.TURN_COUNT || "0", 10) || 0;
 const OUT_DIR = "/home/z/my-project/download/latency";
 const WAV_DIR = `${OUT_DIR}/utterances`;
 mkdirSync(OUT_DIR, { recursive: true });
@@ -109,10 +114,14 @@ async function createSession(cookie: string, dialect: "saudi" | "egyptian"): Pro
 }
 
 async function main() {
-  const TURNS = MINI > 0 ? ALL_TURNS.slice(0, MINI) : ALL_TURNS;
+  let TURNS = MINI > 0 ? ALL_TURNS.slice(0, MINI) : ALL_TURNS;
+  if (OFFSET > 0 || COUNT > 0) {
+    TURNS = ALL_TURNS.slice(OFFSET, COUNT > 0 ? OFFSET + COUNT : undefined);
+  }
+  const chunkLabel = OFFSET > 0 || COUNT > 0 ? `chunk[${OFFSET}..${OFFSET + TURNS.length})` : MINI > 0 ? `mini(${MINI})` : "full";
   const report: Record<string, unknown> = {
     base: BASE,
-    mode: MINI > 0 ? `mini(${MINI})` : "full",
+    mode: chunkLabel,
     startedAt: new Date().toISOString(),
     partA: [] as Record<string, unknown>[],
     partB: [] as Record<string, unknown>[],
@@ -205,7 +214,9 @@ async function main() {
       hadAudio,
       hadError,
       reply: speech?.fullText?.slice(0, 60) ?? null,
-      silent: !hadAudio && !hadError && !events.some((e) => e.type === "warn"),
+      // classroomSilence = a DESIGNED classroom reaction (students listened)
+      // — distinct from a silent FAILURE (no audio, no error, no reason).
+      silent: !hadAudio && !hadError && !events.some((e) => e.type === "warn") && done?.classroomSilence !== true,
     };
     (report.partA as Record<string, unknown>[]).push(rec);
     console.log(
@@ -214,7 +225,7 @@ async function main() {
         `target=${meta?.routing?.targetName ?? "-"}${routingOk ? "" : " (ROUTING MISMATCH)"} ` +
         `audio=${hadAudio} silent=${rec.silent} | ${speech?.fullText?.slice(0, 40) ?? ""}`
     );
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 15_000));
   }
 
   // ==================================================================
@@ -236,51 +247,81 @@ async function main() {
     const sessionId = spec.session === "sa" ? saSessionB : egSessionB;
     const wav = `${WAV_DIR}/${spec.wav}`;
     let rec: Record<string, unknown> | null = null;
-    let browser;
-    try {
-      browser = await chromium.launch({
-        headless: true,
-        args: [
-          "--use-fake-device-for-media-stream",
-          "--use-fake-ui-for-media-stream",
-          `--use-file-for-fake-audio-capture=${wav}`,
-          "--autoplay-policy=no-user-gesture-required",
-        ],
-      });
-      const context = await browser.newContext({ locale: "ar-EG" });
-      await context.addCookies([
-        { name: "fitna_session", value: token, url: BASE },
-        { name: "fitna_auth_ctx", value: authCtxCookie(teacher.id, "teacher").split("=")[1], url: BASE },
-      ]);
-      const page = await context.newPage();
-      await page.goto(`${BASE}/session/live/${sessionId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-      // Open the live mic (the room-mount warmup GET fires automatically).
-      const micBtn = page.locator('button:has-text("بدء الحصة")');
-      await micBtn.waitFor({ state: "visible", timeout: 20_000 });
-      await micBtn.click();
+    const consoleMsgs: string[] = [];
 
-      // Wait for the first latency record (VAD → STT → turn → first audio).
-      const deadline = Date.now() + 75_000;
-      while (Date.now() < deadline) {
-        rec = await page.evaluate(() => {
-          const w = window as unknown as { __fitnaLatency?: Record<string, unknown>[] };
-          const recs = w.__fitnaLatency ?? [];
-          return recs.length > 0 ? recs[0] : null;
+    // Chromium's --use-file-for-fake-audio-capture occasionally delivers a
+    // silent stream (~1 in 10 launches — page reload does NOT reset the
+    // fake device). The robust retry is a FULL browser relaunch.
+    for (let attempt = 1; attempt <= 2 && !rec; attempt++) {
+      let browser;
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          args: [
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            `--use-file-for-fake-audio-capture=${wav}`,
+            "--autoplay-policy=no-user-gesture-required",
+          ],
         });
-        if (rec) break;
-        await page.waitForTimeout(1500);
+        const context = await browser.newContext({ locale: "ar-EG" });
+        await context.addCookies([
+          { name: "fitna_session", value: token, url: BASE },
+          { name: "fitna_auth_ctx", value: authCtxCookie(teacher.id, "teacher").split("=")[1], url: BASE },
+        ]);
+        const page = await context.newPage();
+        // Diagnostics: capture browser console errors + failed requests so a
+        // "no latency record" turn points at its root cause instead of being
+        // a silent mystery.
+        if (attempt > 1) consoleMsgs.push(`[retry] browser relaunch #${attempt}`);
+        page.on("console", (msg) => {
+          if (msg.type() === "error" || msg.type() === "warning") {
+            consoleMsgs.push(`[${msg.type()}] ${msg.text().slice(0, 200)}`);
+          }
+        });
+        page.on("requestfailed", (req) => {
+          consoleMsgs.push(`[requestfailed] ${req.method()} ${req.url().slice(-60)} ${req.failure()?.errorText ?? ""}`);
+        });
+        page.on("response", (res) => {
+          if (res.status() >= 400) consoleMsgs.push(`[http${res.status()}] ${res.request().method()} ${res.url().slice(-60)}`);
+        });
+        await page.goto(`${BASE}/session/live/${sessionId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+        // Wait for REACT HYDRATION before clicking: the room-mount effect
+        // fires a GET /turn/stream warmup — that request proves the LiveRoom
+        // bundle hydrated and its click handlers are live.
+        await page
+          .waitForResponse((r) => r.url().includes("/turn/stream") && r.request().method() === "GET", { timeout: 25_000 })
+          .catch(() => {});
+        const micBtn = page.locator('button:has-text("بدء الحصة")');
+        await micBtn.waitFor({ state: "visible", timeout: 20_000 });
+        await micBtn.click();
+
+        // Wait for the first latency record (VAD → STT → turn → first audio).
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          rec = await page.evaluate(() => {
+            const w = window as unknown as { __fitnaLatency?: Record<string, unknown>[] };
+            const recs = w.__fitnaLatency ?? [];
+            return recs.length > 0 ? recs[0] : null;
+          });
+          if (rec) break;
+          await page.waitForTimeout(1500);
+        }
+        await browser.close();
+      } catch (err) {
+        rec = rec ?? { error: String(err).slice(0, 200) };
+        await browser?.close().catch(() => {});
       }
-      if (!rec) {
-        rec = { turn: i + 1, error: "no latency record (turn never completed)" };
-      }
-      await browser.close();
-    } catch (err) {
-      rec = { turn: i + 1, error: String(err).slice(0, 200) };
-      await browser?.close().catch(() => {});
+    }
+    if (!rec) {
+      rec = { turn: i + 1, error: "no latency record (turn never completed — 2 browser launches)" };
     }
     const r = rec as Record<string, unknown>;
     r.turn = i + 1;
     r.text = spec.text.slice(0, 40);
+    if (consoleMsgs.length > 0) {
+      r.consoleTail = consoleMsgs.slice(-12);
+    }
     (report.partB as Record<string, unknown>[]).push(r);
     const ttfa = typeof r.ttfaClientMs === "number" ? r.ttfaClientMs : -1;
     const srv = (r.server ?? {}) as Record<string, unknown>;
@@ -290,7 +331,12 @@ async function main() {
         `stt+dispatch=${r.transcriptAt && r.dispatchAt ? (r.dispatchAt as number) - (r.transcriptAt as number) : "-"}ms ` +
         `srv(tts0)=${srv.ttsFirstMs ?? "-"} audio=${r.audio} | ${String(r.text ?? "")}`
     );
-    await new Promise((r2) => setTimeout(r2, 1500));
+    if (r.error || (!r.audio && r.classroomSilence !== true)) {
+      for (const c of (r.consoleTail as string[] | undefined) ?? []) console.log(`    · ${c}`);
+    }
+    // Pacing for Groq free-tier token budget: real lessons breathe —
+    // 2.5s gaps exhausted the budget and throttled turns 5+ (13-22s TTFT).
+    await new Promise((r2) => setTimeout(r2, 8000));
   }
 
   // ==================================================================
@@ -314,7 +360,7 @@ async function main() {
     },
   };
 
-  writeFileSync(`${OUT_DIR}/latency_report.json`, JSON.stringify(report, null, 2));
+  writeFileSync(`${OUT_DIR}/latency_report${OFFSET > 0 || COUNT > 0 ? `_chunk${OFFSET}` : ""}.json`, JSON.stringify(report, null, 2));
   console.log("\n================ SUMMARY ================");
   console.log(`Part A (HTTP stream): n=${aTtfa.length} p50=${pct(aTtfa, 50)}ms p95=${pct(aTtfa, 95)}ms silent=${silentA}`);
   console.log(`Part B (browser voice): n=${bTtfa.length} p50=${pct(bTtfa, 50)}ms p95=${pct(bTtfa, 95)}ms silent=${silentB}`);

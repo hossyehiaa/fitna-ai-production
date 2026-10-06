@@ -139,7 +139,8 @@ async function callFishAudio(
   referenceId: string,
   text: string,
   apiKey: string,
-  latencyMode: "normal" | "balanced" = "normal"
+  latencyMode: "normal" | "balanced" = "normal",
+  mp3Bitrate = 128
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FISH_TIMEOUT_MS);
@@ -156,7 +157,7 @@ async function callFishAudio(
         text: text.slice(0, MAX_TEXT_CHARS),
         reference_id: referenceId,
         format: "mp3",
-        mp3_bitrate: 128,
+        mp3_bitrate: mp3Bitrate,
         normalize: true,
         latency: latencyMode,
       }),
@@ -194,7 +195,8 @@ async function synthesizeFishAudio(
   personaName?: string,
   dialect: Dialect = "egyptian",
   personaVoice?: PersonaVoice,
-  latencyMode: "normal" | "balanced" = "normal"
+  latencyMode: "normal" | "balanced" = "normal",
+  mp3Bitrate = 128
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   const apiKey = process.env.FISH_AUDIO_API_KEY;
   if (!apiKey) return null;
@@ -204,7 +206,7 @@ async function synthesizeFishAudio(
   // name-based mapping only as fallback.
   const referenceId =
     personaVoice?.fishVoiceId ?? fishVoiceFor(dialect, personaName ?? "", isFemaleName(personaName));
-  return callFishAudio(referenceId, text, apiKey, latencyMode);
+  return callFishAudio(referenceId, text, apiKey, latencyMode, mp3Bitrate);
 }
 
 // ---------------------------------------------------------------------
@@ -236,7 +238,148 @@ const audioCache = new Map<string, CachedAudio>();
 export type SynthesisOpts = {
   /** Fish Audio latency mode — "balanced" trades a little prosody polish for faster synthesis. */
   fishLatencyMode?: "normal" | "balanced";
+  /** MP3 bitrate (kbps) — the latency-critical first chunk uses 64: speech
+   *  is transparent at 64kbps MP3 and the smaller payload enqueues + ships
+   *  measurably sooner on the time-to-first-audio path. */
+  fishMp3Bitrate?: number;
 };
+
+/**
+ * STREAMING Fish synthesis for the latency-critical FIRST audio chunk.
+ *
+ * Fish's `stream: true` returns raw MP3 bytes as they are synthesized:
+ * measured time-to-FIRST-bytes ≈ 430-480ms vs 700-2400ms for the full
+ * buffer. We forward a frame-aligned PREFIX (~1s of speech) the moment it
+ * arrives — the client starts playback while Fish is still synthesizing
+ * the rest, which is then sent as a follow-up gapless chunk.
+ *
+ * Falls back to the classic full-buffer path (Fish balanced → Edge) when
+ * streaming is unavailable, so sessions never break.
+ */
+export async function synthesizeStudentSpeechStreaming(
+  text: string,
+  personaName: string | undefined,
+  dialect: string | undefined,
+  personaVoice: PersonaVoice | undefined,
+  onEarlyAudio: (prefix: Buffer, contentType: string) => void,
+  opts?: SynthesisOpts
+): Promise<{ earlySent: boolean; buffer: Buffer | null; contentType: string }> {
+  const dialectValue = parseDialect(dialect);
+  const profile = resolveVoiceProfile(personaName, undefined, dialectValue, personaVoice);
+  const normalizedText = prepareTextForTts(text.trim(), dialectValue);
+  if (!normalizedText) return { earlySent: false, buffer: null, contentType: "audio/mpeg" };
+
+  const bitrate = opts?.fishMp3Bitrate ?? 64;
+  const latencyMode = opts?.fishLatencyMode ?? "balanced";
+  const cacheKey = `v7:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${latencyMode}:${bitrate}::${normalizedText}`;
+
+  // Repeat phrases (greetings, common interjections) — instant full cache.
+  if (audioCache.has(cacheKey)) {
+    const cached = audioCache.get(cacheKey)!;
+    return { earlySent: false, buffer: cached.buffer, contentType: cached.contentType };
+  }
+
+  const apiKey = process.env.FISH_AUDIO_API_KEY;
+  const referenceId =
+    personaVoice?.fishVoiceId ?? fishVoiceFor(dialectValue, personaName ?? "", isFemaleName(personaName));
+
+  if (apiKey && referenceId) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), FISH_TIMEOUT_MS);
+      const res = await fetch(FISH_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          model: fishModel(),
+        },
+        body: JSON.stringify({
+          text: normalizedText.slice(0, MAX_TEXT_CHARS),
+          reference_id: referenceId,
+          format: "mp3",
+          mp3_bitrate: bitrate,
+          normalize: true,
+          latency: latencyMode,
+          stream: true,
+        }),
+        signal: controller.signal,
+      });
+      if (res.ok && res.body) {
+        const reader = res.body.getReader();
+        const parts: Buffer[] = [];
+        let earlySent = false;
+        let earlyPrefix: Buffer | null = null;
+        const EARLY_BYTES = 7_500; // ≈0.9s of 64kbps MP3 — enough to start
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.length) parts.push(Buffer.from(value));
+          const total = parts.reduce((n, p) => n + p.length, 0);
+          if (!earlySent && total >= EARLY_BYTES) {
+            const merged = Buffer.concat(parts);
+            const cut = lastMp3FrameBoundary(merged, total);
+            if (cut > 4000) {
+              earlySent = true;
+              earlyPrefix = merged.subarray(0, cut);
+              onEarlyAudio(earlyPrefix, "audio/mpeg");
+              parts.length = 0;
+              parts.push(merged.subarray(cut));
+            }
+          }
+        }
+        clearTimeout(timer);
+        const rest = Buffer.concat(parts);
+        if (rest.length > 0 || earlyPrefix) {
+          // Cache prefix+rest CONCATENATED under the normal key so a repeat
+          // turn gets the whole clip from memory.
+          const full = earlyPrefix ? Buffer.concat([earlyPrefix, rest]) : rest;
+          audioCache.set(cacheKey, { buffer: full, contentType: "audio/mpeg" });
+          trimAudioCache();
+          // When the early prefix already went out, the follow-up event
+          // carries only the REMAINDER (the client schedules both
+          // gaplessly); otherwise this is a normal full-buffer event.
+          return { earlySent, buffer: earlySent ? (rest.length > 0 ? rest : null) : full, contentType: "audio/mpeg" };
+        }
+        // Streaming produced nothing usable — classic fallback below.
+      } else {
+        clearTimeout(timer);
+        console.warn(`Fish streaming returned ${res.status}: ${String(await res.text().catch(() => "")).slice(0, 120)}`);
+      }
+    } catch (err) {
+      console.warn("Fish streaming error:", err);
+    }
+  }
+
+  // Classic full-buffer path (Fish balanced → Edge) — no early audio.
+  const classic = await synthesizeStudentSpeech(text, personaName, undefined, dialect, personaVoice, {
+    fishLatencyMode: latencyMode,
+    fishMp3Bitrate: bitrate,
+  });
+  return { earlySent: false, buffer: classic?.buffer ?? null, contentType: classic?.contentType ?? "audio/mpeg" };
+}
+
+/**
+ * Cut position of the last COMPLETE MP3 frame boundary within the first
+ * `limit` bytes (frame sync = 11 set bits, 0xFF 0xE0 mask). Cutting on a
+ * frame boundary keeps both halves independently decodable by
+ * decodeAudioData in every browser.
+ */
+function lastMp3FrameBoundary(buf: Buffer, limit: number): number {
+  const FRAME_MAX = 210 + 1; // 64kbps@44.1kHz Layer III ≈ 208-209 bytes
+  const end = Math.min(buf.length, limit) - FRAME_MAX;
+  for (let i = end; i >= 0; i--) {
+    if (buf[i] === 0xff && (buf[i + 1] & 0xe0) === 0xe0) return i;
+  }
+  return -1;
+}
+
+function trimAudioCache() {
+  if (audioCache.size >= 100) {
+    const firstKey = audioCache.keys().next().value as string | undefined;
+    if (firstKey) audioCache.delete(firstKey);
+  }
+}
 
 export async function synthesizeStudentSpeech(
   text: string,
@@ -253,7 +396,7 @@ export async function synthesizeStudentSpeech(
   const normalizedText = prepareTextForTts(text.trim(), dialectValue);
   if (!normalizedText) return null;
 
-  const cacheKey = `v6:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}:::${normalizedText}`;
+  const cacheKey = `v7:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${opts?.fishLatencyMode ?? "normal"}:${opts?.fishMp3Bitrate ?? 128}::${normalizedText}`;
 
   if (audioCache.has(cacheKey)) {
     return audioCache.get(cacheKey)!;
@@ -266,7 +409,7 @@ export async function synthesizeStudentSpeech(
   //    failure (402 credit, timeout, outage).
   if (!voiceOverride && process.env.FISH_AUDIO_API_KEY) {
     try {
-      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice, opts?.fishLatencyMode ?? "normal");
+      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice, opts?.fishLatencyMode ?? "normal", opts?.fishMp3Bitrate ?? 128);
     } catch (e) {
       console.warn("Fish Audio synthesis error:", e);
     }

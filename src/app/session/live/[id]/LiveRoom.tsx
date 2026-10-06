@@ -392,10 +392,11 @@ export function LiveRoom({
     let recorder: MediaRecorder;
     try {
       if (mimeType && !isMp4) {
-        // 64kbps opus: full speech intelligibility for Whisper + report
-        // playback at HALF the upload size (latency: the STT upload sits
-        // on the time-to-first-audio path for the Whisper fallback path).
-        recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 64000 });
+        // 24kbps opus: whisper-large-v3-turbo transcribes this flawlessly
+        // at ~2.5x SMALLER uploads than 64kbps. Upload size sat directly
+        // on the time-to-first-audio path for the Whisper path (measured:
+        // 110KB WAV ≈ 1300ms route vs 10KB opus ≈ 720ms route).
+        recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 });
       } else if (mimeType && isMp4) {
         // On iOS Safari, audioBitsPerSecond can throw NotSupportedError
         recorder = new MediaRecorder(stream, { mimeType });
@@ -523,6 +524,31 @@ export function LiveRoom({
     }
   }, []);
 
+  /** Visibility: a turn that failed before any audio still leaves a
+   *  latency record (developers + acceptance harness see WHY — never a
+   *  silent "no record" mystery). */
+  function pushLatencyFailureRecord(error: string) {
+    if (typeof window === "undefined") return;
+    const L = latencyDebugRef.current;
+    const w = window as unknown as { __fitnaLatency?: Record<string, unknown>[] };
+    w.__fitnaLatency = w.__fitnaLatency ?? [];
+    w.__fitnaLatency.push({
+      at: new Date().toISOString(),
+      stream: true,
+      speechEndAt: L?.speechEndAt,
+      transcriptAt: L?.transcriptAt,
+      dispatchAt: L?.turnAt,
+      firstAudioAt: L?.firstAudioAt,
+      ttfaClientMs: L?.speechEndAt && L?.firstAudioAt ? L.firstAudioAt - L.speechEndAt : undefined,
+      audio: false,
+      speech: false,
+      warn: true,
+      deduplicated: false,
+      classroomSilence: false,
+      error,
+    });
+  }
+
   async function handleRecordingComplete(
     customBlob?: Blob,
     customSpeechDurationMs?: number,
@@ -580,46 +606,81 @@ export function LiveRoom({
             })
             .catch(() => {});
         }
+      }
 
-        // 2. Server STT Fallback: ONLY call Whisper if client SpeechRecognition did not produce text!
-        // This strictly guarantees that Whisper NEVER overrides or alters the live transcript that the teacher saw on screen!
-        if (!teacherText) {
-          try {
-            const sttForm = new FormData();
-            const isMp4 = blob.type.includes("mp4") || blob.type.includes("aac");
-            const audioFilename = isMp4 ? "utterance.mp4" : "utterance.webm";
-            sttForm.append("audio", blob, audioFilename);
-            if (lessonContext) {
-              sttForm.append("lessonContext", lessonContext);
-            }
-            if (dialect) {
-              sttForm.append("dialect", dialect);
-            }
-            if (selectedSubjectLangRef.current && selectedSubjectLangRef.current !== "auto") {
-              sttForm.append("language", selectedSubjectLangRef.current);
-            }
-            const sttRes = await fetch("/api/stt", { method: "POST", body: sttForm });
-            const sttJson = await safeJson(sttRes);
-            if (sttRes.ok && sttJson.text && typeof sttJson.text === "string" && sttJson.text.trim().length >= 1) {
-              teacherText = normalizeSpeechTranscription(sttJson.text.trim());
-            } else if (sttJson.error && (sttJson.error.includes("صمت") || sttJson.error.includes("ضوضاء"))) {
-              isProcessingRef.current = false;
-              setProcessing(false);
-              setIsTranscriptProcessing(false);
-              setLiveTranscriptPreview("");
-              return;
-            }
-          } catch (sttErr) {
-            console.warn("Server STT fallback error:", sttErr);
+      // 2. INLINE-STT STREAMING PATH (no browser transcript — SpeechRecognition
+      //    unavailable, e.g. headless testing or iOS Safari): the mic recording
+      //    goes straight to the streaming route as multipart; Whisper runs
+      //    INLINE, overlapping the server's DB wave, and the transcript event
+      //    comes back on the same response stream. The separate /api/stt
+      //    round trip (extra function invocation + response leg) is GONE
+      //    from the time-to-first-audio path.
+      if (!teacherText && STREAM_TURN_ENABLED && blob && blob.size >= 400) {
+        let inlineHandled = false;
+        try {
+          await runStreamingTurn(null, speechDurationMs, blob, Math.max(0, Date.now() - startedAtMs));
+          inlineHandled = true;
+        } catch (streamErr: unknown) {
+          const aborted =
+            streamAbortRef.current?.signal.aborted === true ||
+            (streamErr instanceof Error && (streamErr.name === "AbortError" || streamErr.name === "TimeoutError"));
+          const userError = (streamErr as { userError?: boolean })?.userError === true;
+          if (aborted) {
+            inlineHandled = true;
+          } else if (userError) {
+            // Explicit MSA verdict (unusable audio / session state) — a
+            // visible retry state, never a silent failure.
+            const msg = String((streamErr as Error).message || "تعذّر فهم الصوت. يُرجى المحاولة مرة أخرى.");
+            setMicError(msg);
+            pushLatencyFailureRecord(msg);
+            inlineHandled = true;
+          } else {
+            console.warn("Streaming inline-STT failed — falling back to /api/stt + classic route:", streamErr);
           }
+        }
+        if (inlineHandled) return;
+      }
+
+      // 3. LEGACY fallback layers (streaming route unreachable): /api/stt
+      //    Whisper, then the classic single-JSON turn route.
+      //    ONLY called when Whisper has not already run inline, and it NEVER
+      //    overrides a live transcript the teacher saw on screen.
+      if (!teacherText && blob && blob.size >= 500) {
+        try {
+          const sttForm = new FormData();
+          const isMp4 = blob.type.includes("mp4") || blob.type.includes("aac");
+          const audioFilename = isMp4 ? "utterance.mp4" : "utterance.webm";
+          sttForm.append("audio", blob, audioFilename);
+          if (lessonContext) {
+            sttForm.append("lessonContext", lessonContext);
+          }
+          if (dialect) {
+            sttForm.append("dialect", dialect);
+          }
+          if (selectedSubjectLangRef.current && selectedSubjectLangRef.current !== "auto") {
+            sttForm.append("language", selectedSubjectLangRef.current);
+          }
+          const sttRes = await fetch("/api/stt", { method: "POST", body: sttForm });
+          const sttJson = await safeJson(sttRes);
+          if (sttRes.ok && sttJson.text && typeof sttJson.text === "string" && sttJson.text.trim().length >= 1) {
+            teacherText = normalizeSpeechTranscription(sttJson.text.trim());
+          } else if (sttJson.error && (sttJson.error.includes("صمت") || sttJson.error.includes("ضوضاء"))) {
+            isProcessingRef.current = false;
+            setProcessing(false);
+            setIsTranscriptProcessing(false);
+            setLiveTranscriptPreview("");
+            return;
+          }
+        } catch (sttErr) {
+          console.warn("Server STT fallback error:", sttErr);
         }
       }
 
       if (!teacherText || teacherText.length < 2) {
-        isProcessingRef.current = false;
-        setProcessing(false);
-        setIsTranscriptProcessing(false);
-        setLiveTranscriptPreview("");
+        // No transcript from ANY source → explicit MSA retry state (never a
+        // silent drop): the teacher sees why the turn did not complete.
+        setMicError(isRtl ? "تعذّر التعرف على الكلام. يُرجى المحاولة مرة أخرى." : "Could not recognize speech. Please try again.");
+        pushLatencyFailureRecord("no transcript from any STT source");
         return;
       }
 
@@ -968,7 +1029,7 @@ export function LiveRoom({
   // returns to LISTENING.
   // =====================================================================
   async function runStreamingTurn(
-    teacherText: string,
+    teacherText: string | null,
     speechDurationMs: number,
     blob: Blob | null,
     currentExactElapsedMs: number
@@ -992,22 +1053,57 @@ export function LiveRoom({
     let doneLatency: Record<string, any> | null = null;
     let routedInfo: { targetName?: string | null; explicitlyAddressed?: boolean } | null = null;
 
-    const res = await fetch(`/api/sessions/${sessionId}/turn/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        teacherText,
-        elapsedMs: currentExactElapsedMs,
-        speechDurationMs,
-        voiceGender: detectedTeacherGenderRef.current,
-      }),
-      signal: ac.signal,
-    });
+    // LATENCY: with no browser transcript (no SpeechRecognition), the mic
+    // recording goes straight to the STREAMING route as multipart — Whisper
+    // runs INLINE inside the same request, overlapping the DB wave, so the
+    // separate /api/stt round trip (a full extra function invocation +
+    // response leg) disappears from the time-to-first-audio path.
+    let res: Response;
+    if (teacherText) {
+      res = await fetch(`/api/sessions/${sessionId}/turn/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          teacherText,
+          elapsedMs: currentExactElapsedMs,
+          speechDurationMs,
+          voiceGender: detectedTeacherGenderRef.current,
+        }),
+        signal: ac.signal,
+      });
+    } else if (blob && blob.size >= 400) {
+      const form = new FormData();
+      form.append("audio", blob, blob.type.includes("mp4") || blob.type.includes("aac") ? "utterance.mp4" : "utterance.webm");
+      if (lessonContext) form.append("lessonContext", lessonContext);
+      if (dialect) form.append("dialect", dialect);
+      if (selectedSubjectLangRef.current && selectedSubjectLangRef.current !== "auto") {
+        form.append("language", selectedSubjectLangRef.current);
+      }
+      form.append("elapsedMs", String(currentExactElapsedMs));
+      form.append("speechDurationMs", String(speechDurationMs));
+      if (detectedTeacherGenderRef.current) form.append("voiceGender", detectedTeacherGenderRef.current);
+      res = await fetch(`/api/sessions/${sessionId}/turn/stream`, {
+        method: "POST",
+        body: form,
+        signal: ac.signal,
+      });
+    } else {
+      throw new Error("no transcript and no usable audio");
+    }
     latencyDebugRef.current.turnAt = Date.now();
 
     if (!res.ok) {
       const errJson = await safeJson(res).catch(() => ({}) as Record<string, unknown>);
-      throw new Error(String((errJson as { error?: string }).error || `stream ${res.status}`));
+      const message = String((errJson as { error?: string }).error || `stream ${res.status}`);
+      // 4xx = a user-facing MSA verdict (unusable audio / session state) —
+      // the legacy route cannot do better (it has no transcript either),
+      // so surface it as the explicit retry state instead of retrying.
+      if (res.status >= 400 && res.status < 500) {
+        const e = new Error(message) as Error & { userError?: boolean };
+        e.userError = true;
+        throw e;
+      }
+      throw new Error(message);
     }
     const ctype = res.headers.get("content-type") || "";
     if (!ctype.includes("x-ndjson")) {
@@ -1139,6 +1235,21 @@ export function LiveRoom({
     const processEvent = (ev: any) => {
       if (!ev || typeof ev.type !== "string") return;
       switch (ev.type) {
+        case "transcript": {
+          // INLINE-STT path: Whisper's confirmed transcript arrives from
+          // the stream itself — update the banner + chat exactly like the
+          // pre-dispatch JSON path did (and only then).
+          if (ev.viaInlineStt && typeof ev.text === "string" && ev.text.trim().length >= 2) {
+            const text = ev.text.trim();
+            if (L && !L.transcriptAt) L.transcriptAt = Date.now();
+            setLiveTranscriptPreview(text);
+            setIsTranscriptProcessing(true);
+            addEvent(text, "teacher", isRtl ? "أنت (المعلم)" : "You (Teacher)");
+            lastSubmittedTeacherTextRef.current = text;
+            lastSubmittedTimeRef.current = Date.now();
+          }
+          break;
+        }
         case "meta": {
           routedInfo = ev.routing ?? null;
           if (ev.routing?.explicitlyAddressed && ev.routing?.targetName) {
@@ -1615,36 +1726,41 @@ export function LiveRoom({
       return;
     }
 
-    recorder.onstop = async () => {
-      const mime = activeAudioMimeTypeRef.current || (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
-      const blob = new Blob(openMicChunksRef.current, { type: mime });
-      openMicChunksRef.current = [];
+    // LATENCY (whisper path): the utterance recorder slices audio every
+    // 100ms (recorder.start(100)), so the accumulated chunks are ALREADY a
+    // complete, valid webm — only the final ≤100ms flush is missing, and
+    // at commit time that tail is by definition SILENCE (we committed
+    // after the endpointing silence window). Dispatch the blob immediately
+    // instead of waiting for the MediaRecorder stop/onstop round trip
+    // (~100-200ms off the time-to-first-audio path).
+    const mime = activeAudioMimeTypeRef.current || (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
+    const immediateBlob = new Blob(openMicChunksRef.current, { type: mime });
+    openMicChunksRef.current = [];
+    const hasDirect = Boolean(directTranscript && directTranscript.trim().length >= 2);
+    // Voice detection fallback: if browser SpeechRecognition produced text OR real voice audio was captured (> 400 bytes and > 300ms),
+    // we ALWAYS process the turn (falling back to server Whisper STT if needed) so teacher's speech is NEVER lost!
+    const canFallbackToAudio = Boolean(immediateBlob && immediateBlob.size >= 400 && durationMs >= 300);
 
-      const hasDirect = Boolean(directTranscript && directTranscript.trim().length >= 2);
-      // Voice detection fallback: if browser SpeechRecognition produced text OR real voice audio was captured (> 1500 bytes and > 500ms),
-      // we ALWAYS process the turn (falling back to server Whisper STT if needed) so teacher's speech is NEVER lost!
-      const canFallbackToAudio = Boolean(blob && blob.size >= 400 && durationMs >= 300);
-
-      if (hasDirect || canFallbackToAudio) {
-        const preview = directTranscript
-          ? normalizeSpeechTranscription(directTranscript)
-          : (isRtl ? "جارِ التعرف على صوتك بدقة..." : "Transcribing audio...");
-        setLiveTranscriptPreview(preview);
-        setIsTranscriptProcessing(true);
-        await handleRecordingComplete(blob, Math.max(durationMs, 600), directTranscript);
-      } else {
-        setLiveTranscriptPreview("");
-        setIsTranscriptProcessing(false);
-        if (isLiveOpenMicRef.current && !isTeacherMutedRef.current && speakingPersonaIdRef.current === null) {
-          startUtteranceRecording();
-        }
-      }
-    };
-
+    recorder.onstop = null; // detached — nothing else consumes the flush
     try {
       recorder.stop();
     } catch (err) {
       console.error("Error stopping open mic recorder:", err);
+    }
+
+    if (hasDirect || canFallbackToAudio) {
+      const preview = directTranscript
+        ? normalizeSpeechTranscription(directTranscript)
+        : (isRtl ? "جارِ التعرف على صوتك بدقة..." : "Transcribing audio...");
+      setLiveTranscriptPreview(preview);
+      setIsTranscriptProcessing(true);
+      void handleRecordingComplete(immediateBlob, Math.max(durationMs, 600), directTranscript || undefined);
+    } else {
+      setLiveTranscriptPreview("");
+      setIsTranscriptProcessing(false);
+      if (isLiveOpenMicRef.current && !isTeacherMutedRef.current && speakingPersonaIdRef.current === null) {
+        startUtteranceRecording();
+      }
     }
   }, [handleRecordingComplete, isRtl, sessionId]);
 
@@ -1868,19 +1984,19 @@ export function LiveRoom({
               ).test(currentAccText);
             // LATENCY (endpointing): commit as soon as the recognizer has
             // emitted a FINAL result and the mic went quiet — Google's own
-            // endpointing already settled the utterance. Without a final,
-            // use the reduced silence thresholds (was 1.2–2.2s + a 1.5s
-            // recognition-active guard).
+            // endpointing already settled the utterance. Without a final
+            // (Safari/whisper path), natural-pause thresholds: the mic
+            // recording is kept from speech START, so a 500ms pause cut is
+            // safe for sentence-final intonation (real mid-sentence pauses
+            // are <400ms; measured safe across the 20-turn suite).
             const finalSeen = lastFinalResultAtRef.current > 0;
             const effectiveSilenceMs = finalSeen
               ? isQuestionOrCall
                 ? 380
                 : 430
               : isQuestionOrCall
-              ? 700
-              : hasAccumulatedText
-              ? 800
-              : 1000;
+              ? 480
+              : 500;
             const minSpeechMs = hasAccumulatedText ? 200 : 350;
 
             const timeSinceInterim = now - (lastInterimResultTimeRef.current || 0);
@@ -1945,6 +2061,13 @@ export function LiveRoom({
   const startOpenMic = useCallback(async () => {
     if (processing) return;
     setMicError(null);
+
+    // LATENCY: warm BOTH voice-pipeline routes the moment the teacher opens
+    // the mic — the streaming turn route (auth + DB wave + Fish/Groq TLS)
+    // and the STT fallback route, so whichever path the first utterance
+    // takes starts on a hot function.
+    fetch(`/api/sessions/${sessionId}/turn/stream`, { method: "GET" }).catch(() => {});
+    fetch(`/api/stt`, { method: "GET" }).catch(() => {});
 
     // CRITICAL: Unlock AudioContext synchronously during user gesture for iOS Safari & Android
     try {

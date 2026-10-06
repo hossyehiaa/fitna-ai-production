@@ -274,8 +274,15 @@ export type ServerShimClient = {
 }
 
 /** User-scoped client (RLS policies enforced against the session user). */
-export async function createClient(_options?: { bypassDemo?: boolean }): Promise<ServerShimClient> {
-  const user = await getCurrentUser()
+export async function createClient(
+  _options?: { bypassDemo?: boolean; user?: AuthUserRow | null }
+): Promise<ServerShimClient> {
+  // LATENCY: callers that ALREADY resolved the authenticated user (e.g. a
+  // token cache hit on the streaming turn route) pass it here — skipping
+  // this function's second getCurrentUser() DB round trip. Without it,
+  // every createClient() re-queries the auth session on Neon, which sat
+  // directly on the time-to-first-audio path.
+  const user = _options && _options.user !== undefined ? _options.user : await getCurrentUser()
   const ctx = ctxFromUser(user)
   return {
     auth: makeAuthApi(),

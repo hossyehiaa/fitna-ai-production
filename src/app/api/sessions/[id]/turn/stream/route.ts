@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser, type AuthUserRow } from "@/lib/auth/session";
+import { toShimUser, type ShimUser } from "@/lib/supabase/shim";
 import {
   classifyTeacherUtterance,
   buildTurnPlan,
@@ -12,16 +14,31 @@ import {
 import { callGroqStreamWithFallback, CHAT_MODEL } from "@/lib/ai/groq";
 import { buildCandidateStudentPrompt } from "@/lib/ai/personas";
 import { normalizeSpeechTranscription } from "@/lib/audio/speechNormalizer";
-import { synthesizeStudentSpeech, type PersonaVoice } from "@/app/api/tts/route";
+import { synthesizeStudentSpeech, synthesizeStudentSpeechStreaming, type PersonaVoice } from "@/app/api/tts/route";
 import { parseDialect } from "@/lib/ai/dialects";
 import { resolveTargetCharacter, explicitTargetFromUtterance } from "@/lib/ai/speakerRouting";
 import { createSentenceChunker, createJsonTextFieldExtractor } from "@/lib/ai/streamChunker";
+import { transcribeTeacherAudio } from "@/lib/ai/stt";
+import { db as prismaDb } from "@/lib/db";
 import type { StudentPhysicalAction } from "@/lib/simulation/classroomState";
 import type { Database } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
+
+// ---------------------------------------------------------------------
+// INSTANCE-BOOT WARMING (latency): open the Neon pool + upstream TLS the
+// moment a cold serverless instance loads this module — BEFORE any
+// request arrives. Without this, the first request on a cold instance
+// pays the full Prisma/Neon TLS handshake chain (~800ms from fra1) plus
+// the Fish/Groq TLS handshakes inline on the critical path.
+// (warmUpstreamConnections is a hoisted function declaration below.)
+// ---------------------------------------------------------------------
+if (process.env.DATABASE_URL) {
+  void prismaDb.$queryRaw`SELECT 1`.catch(() => {});
+}
+warmUpstreamConnections();
 
 type Persona = Database["public"]["Tables"]["student_personas"]["Row"];
 
@@ -58,6 +75,129 @@ const PERSONA_CACHE_TTL_MS = 10 * 60_000;
 /** Cap the history scan — O(1) per turn instead of the full event table. */
 const EVENTS_CAP = 150;
 
+// ---------------------------------------------------------------------
+// LATENCY CACHES (per serverless instance).
+//
+// authUserCache: fitna_session token → user row (TTL 120s). The warmup
+// GET primes it at room-open, so the POST's auth hop becomes a memory
+// read instead of a Neon round trip on the critical path. Logout
+// invalidates the DB session; the cache honors it within ≤120s.
+//
+// waveCache: sessionId → {session, students, profile, events} (TTL 10s).
+// Primed by the warmup GET and refreshed right after each turn's own
+// persistence, so the parallel DB wave collapses to a memory read on
+// every real turn (the write is always followed by a refresh).
+// ---------------------------------------------------------------------
+const authUserCache = new Map<string, { row: AuthUserRow; shim: ShimUser; at: number }>();
+const AUTH_CACHE_TTL_MS = 120_000;
+
+type WaveRow = {
+  session: {
+    id: string;
+    teacher_id: string;
+    status: string;
+    lesson_context: string | null;
+    started_at: string | null;
+    dialect: string | null;
+  };
+  sessionStudents: { id: string; persona_id: string; final_attention: number | null; times_spoken: number | null }[];
+  teacherFullName: string;
+  events: {
+    actor: string | null;
+    content: string | null;
+    event_type: string;
+    metadata: unknown;
+    occurred_at_ms: number | null;
+  }[]; // DESCENDING (newest first) — mirrors the uncapped query order
+  at: number;
+  fetchMs: number; // 0 on cache hit; real DB wave duration on a miss
+};
+const waveCache = new Map<string, WaveRow>();
+const WAVE_CACHE_TTL_MS = 10_000;
+
+/** Extract the session token straight off the request cookie (no DB). */
+function sessionToken(request: NextRequest): string {
+  return request.cookies.get("fitna_session")?.value ?? "";
+}
+
+/** Cached auth: token → {row, shim}. Full DB verification on cache miss;
+ *  the row feeds createClient({user}) so the shim NEVER re-queries Neon. */
+async function getUserCached(request: NextRequest): Promise<{ row: AuthUserRow; shim: ShimUser } | null> {
+  const token = sessionToken(request);
+  if (token) {
+    const hit = authUserCache.get(token);
+    if (hit && Date.now() - hit.at < AUTH_CACHE_TTL_MS) return { row: hit.row, shim: hit.shim };
+  }
+  // getCurrentUser() reads the request-scoped cookies and verifies the
+  // session token against the DB (logout-safe, expiry-checked).
+  const row = await getCurrentUser();
+  if (!row) return null;
+  const shim = toShimUser(row);
+  if (token) {
+    authUserCache.set(token, { row, shim, at: Date.now() });
+    if (authUserCache.size > 512) {
+      const first = authUserCache.keys().next().value as string;
+      authUserCache.delete(first);
+    }
+  }
+  return { row, shim };
+}
+
+/** The ownership-gated parallel DB wave, cached per session. */
+async function getWave(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  sessionId: string,
+  userId: string
+): Promise<WaveRow | null> {
+  const cached = waveCache.get(sessionId);
+  if (cached && Date.now() - cached.at < WAVE_CACHE_TTL_MS) {
+    return cached;
+  }
+  const tWave = Date.now();
+  const [sessionRes, studentsRes, profileRes, eventsRes] = await Promise.all([
+    supabase
+      .from("sessions")
+      .select("id, teacher_id, status, lesson_context, started_at, dialect")
+      .eq("id", sessionId)
+      .maybeSingle(),
+    supabase.from("session_students").select("id, persona_id, final_attention, times_spoken").eq("session_id", sessionId),
+    supabase.from("users").select("full_name").eq("id", userId).single(),
+    supabase
+      .from("session_events")
+      .select("actor, content, event_type, metadata, occurred_at_ms")
+      .eq("session_id", sessionId)
+      .order("occurred_at_ms", { ascending: false })
+      .limit(EVENTS_CAP),
+  ]);
+  const session = sessionRes.data as WaveRow["session"] | null;
+  if (!session || session.teacher_id !== userId) return null;
+  const row: WaveRow = {
+    session,
+    sessionStudents: (studentsRes.data ?? []) as WaveRow["sessionStudents"],
+    teacherFullName: (profileRes.data as { full_name?: string } | null)?.full_name || "",
+    events: (eventsRes.data ?? []) as WaveRow["events"],
+    at: Date.now(),
+    fetchMs: Date.now() - tWave,
+  };
+  waveCache.set(sessionId, row);
+  if (waveCache.size > 128) {
+    const first = waveCache.keys().next().value as string;
+    waveCache.delete(first);
+  }
+  return row;
+}
+
+/** Refresh after our own writes so the next turn reads a fresh wave. */
+function refreshWave(sessionId: string, userRow: AuthUserRow) {
+  waveCache.delete(sessionId);
+  void (async () => {
+    try {
+      const supabase = await createClient({ user: userRow });
+      await getWave(supabase, sessionId, userRow.id);
+    } catch {}
+  })();
+}
+
 const NDJSON_HEADERS: Record<string, string> = {
   "Content-Type": "application/x-ndjson; charset=utf-8",
   "Cache-Control": "no-store, no-transform",
@@ -84,101 +224,147 @@ function warmUpstreamConnections() {
 }
 
 // GET — warmup ping. The live room fires this on mount so the function,
-// the Prisma/Neon connection AND the upstream TLS pools are hot before
-// the teacher ever finishes a sentence.
+// the Prisma/Neon connection, the auth token cache, the session's DB wave
+// AND the upstream TLS pools are hot BEFORE the teacher ever finishes a
+// sentence.
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
+  const auth = await getUserCached(request);
+  if (!auth) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
 
-  const { data: session } = await supabase
-    .from("sessions")
-    .select("id, teacher_id, status")
-    .eq("id", sessionId)
-    .single();
-  if (!session || session.teacher_id !== user.id) {
+  // {user} skips createClient's own getCurrentUser() DB round trip.
+  const supabase = await createClient({ user: auth.row });
+  const wave = await getWave(supabase, sessionId, auth.row.id);
+  if (!wave) {
     return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
   }
+
+  // Prime the persona module cache too (roster is immutable).
+  const personaIds = wave.sessionStudents.map((s) => s.persona_id);
+  const cacheKey = [...personaIds].sort().join(",");
+  const cached = personaCache.get(cacheKey);
+  if (!cached || Date.now() - cached.at >= PERSONA_CACHE_TTL_MS) {
+    if (personaIds.length > 0) {
+      const { data: personaRows } = await supabase.from("student_personas").select("*").in("id", personaIds);
+      personaCache.set(cacheKey, { at: Date.now(), rows: (personaRows as Persona[]) ?? [] });
+    }
+  }
+
   warmUpstreamConnections();
-  return NextResponse.json({ ok: true, warmed: true, status: session.status });
+  return NextResponse.json({ ok: true, warmed: true, status: wave.session.status });
 }
 
+// ---------------------------------------------------------------------
+// POST — one streaming turn.
+//
+// Body is EITHER:
+//   application/json        { teacherText, elapsedMs, speechDurationMs, voiceGender }
+//   multipart/form-data     audio=<blob>, lessonContext, dialect, language,
+//                           elapsedMs, speechDurationMs, voiceGender
+//                           → Whisper STT runs INLINE inside this request:
+//                           the browser skips the separate /api/stt round
+//                           trip entirely (latency: that hop sat on the
+//                           time-to-first-audio path for every teacher
+//                           whose browser has no SpeechRecognition).
+// ---------------------------------------------------------------------
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const t0 = Date.now();
   const { id: sessionId } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
+  const auth = await getUserCached(request);
+  if (!auth) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
+  const user = auth.shim;
   const tAuth = Date.now();
 
-  const body = await request.json().catch(() => ({}));
-  const { teacherText: inputTeacherText, elapsedMs, speechDurationMs, voiceGender } = body as {
-    teacherText?: string;
-    elapsedMs?: number;
-    speechDurationMs?: number;
-    voiceGender?: "male" | "female" | null;
-  };
-  const teacherText = normalizeSpeechTranscription((inputTeacherText || "").trim());
+  // ---- Parse the request body (JSON text OR multipart audio) ----
+  let inputTeacherText = "";
+  let elapsedMs: number | undefined;
+  let speechDurationMs: number | undefined;
+  let voiceGender: "male" | "female" | null | undefined;
+  let audioFile: { buffer: Buffer; name?: string; type?: string } | null = null;
+  let sttOpts: { lessonContext?: string | null; dialect?: string | null; language?: string | null } = {};
+  const ctype = request.headers.get("content-type") || "";
+  if (ctype.includes("multipart/form-data")) {
+    const form = await request.formData();
+    const f = form.get("audio");
+    if (f instanceof File && f.size > 0) {
+      audioFile = { buffer: Buffer.from(await f.arrayBuffer()), name: f.name, type: f.type };
+    }
+    inputTeacherText = String(form.get("teacherText") || "");
+    const e = Number(form.get("elapsedMs") || 0);
+    const s = Number(form.get("speechDurationMs") || 0);
+    elapsedMs = Number.isFinite(e) ? e : undefined;
+    speechDurationMs = Number.isFinite(s) ? s : undefined;
+    const vg = String(form.get("voiceGender") || "");
+    voiceGender = vg === "male" || vg === "female" ? vg : null;
+    sttOpts = {
+      lessonContext: String(form.get("lessonContext") || "") || null,
+      dialect: String(form.get("dialect") || "") || null,
+      language: String(form.get("language") || "") || null,
+    };
+  } else {
+    const body = await request.json().catch(() => ({}));
+    const b = body as {
+      teacherText?: string;
+      elapsedMs?: number;
+      speechDurationMs?: number;
+      voiceGender?: "male" | "female" | null;
+    };
+    inputTeacherText = b.teacherText || "";
+    elapsedMs = b.elapsedMs;
+    speechDurationMs = b.speechDurationMs;
+    voiceGender = b.voiceGender;
+  }
+
+  let teacherText = normalizeSpeechTranscription((inputTeacherText || "").trim());
+  const tParse = Date.now();
+
+  // ---- LATENCY: inline Whisper STT runs IN PARALLEL with the DB wave ----
+  // {user} = the auth-cache row: createClient skips its own DB lookup.
+  const supabase = await createClient({ user: auth.row });
+  const wavePromise = getWave(supabase, sessionId, user.id);
+  const sttPromise: Promise<{ text: string | null; error: string | null; ms: number } | null> = audioFile
+    ? (async () => {
+        const ts = Date.now();
+        const outcome = await transcribeTeacherAudio(audioFile!, sttOpts);
+        return { text: outcome.ok ? outcome.text : null, error: outcome.ok ? null : outcome.error, ms: Date.now() - ts };
+      })()
+    : Promise.resolve(null);
+
+  const wave = await wavePromise;
+  if (!wave) {
+    return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
+  }
+  if (wave.session.status !== "in_progress") {
+    return NextResponse.json({ error: "انتهت هذه الجلسة بالفعل" }, { status: 400 });
+  }
+  const sttResult = await sttPromise;
+  if (!teacherText && audioFile) {
+    if (sttResult?.text) {
+      teacherText = normalizeSpeechTranscription(sttResult.text);
+    } else {
+      // Whisper heard nothing usable — explicit MSA retry state, never silent.
+      const err = sttResult?.error || "تعذّر فهم الصوت. يُرجى المحاولة مرة أخرى.";
+      return NextResponse.json({ error: err }, { status: 400 });
+    }
+  }
   if (!teacherText) {
     return NextResponse.json({ error: "لم يتم التقاط أي كلام" }, { status: 400 });
   }
 
-  // LATENCY: the ownership-gate session row, students, profile and capped
-  // events ALL run in ONE parallel wave (was: sequential auth → session →
-  // batch = 3 round-trip waves). Classify LLM needs only the transcript,
-  // so it rides the same wave.
-  const sessionQ = supabase
-    .from("sessions")
-    .select("id, teacher_id, status, lesson_context, started_at, dialect")
-    .eq("id", sessionId)
-    .maybeSingle();
-  const studentsQ = supabase
-    .from("session_students")
-    .select("id, persona_id, final_attention, times_spoken")
-    .eq("session_id", sessionId);
-  const profileQ = supabase.from("users").select("full_name").eq("id", user.id).single();
-  const eventsQ = supabase
-    .from("session_events")
-    .select("actor, content, event_type, metadata, occurred_at_ms")
-    .eq("session_id", sessionId)
-    .order("occurred_at_ms", { ascending: false })
-    .limit(EVENTS_CAP);
-
   const classifyPromise = classifyTeacherUtterance(teacherText).catch(() => "statement" as QuestionType);
 
-  const [sessionRes, studentsRes, profileRes, eventsRes] = await Promise.all([
-    sessionQ,
-    studentsQ,
-    profileQ,
-    eventsQ,
-  ]);
-  const session = sessionRes.data as { id?: string; teacher_id?: string; status?: string; lesson_context?: string | null; started_at?: string | null; dialect?: string | null } | null;
-  if (!session || session.teacher_id !== user.id) {
-    return NextResponse.json({ error: "لا تملك صلاحية الوصول إلى هذه الجلسة" }, { status: 403 });
-  }
-  if (session.status !== "in_progress") {
-    return NextResponse.json({ error: "انتهت هذه الجلسة بالفعل" }, { status: 400 });
-  }
-
-  const sessionStudents = (studentsRes.data ?? []) as {
-    id: string;
-    persona_id: string;
-    final_attention: number | null;
-    times_spoken: number | null;
-  }[];
+  const session = wave.session;
+  const sessionStudents = wave.sessionStudents;
   const teacherFullName =
-    (profileRes.data as { full_name?: string } | null)?.full_name ||
+    wave.teacherFullName ||
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (user as any).user_metadata?.full_name ||
     user.email ||
     "";
+  const waveEvents = wave.events;
 
   // Personas: immutable character identities → module cache.
+  const tPersonas = Date.now();
   const personaIds = sessionStudents.map((s) => s.persona_id);
   const cacheKey = [...personaIds].sort().join(",");
   let personas: Persona[] = [];
@@ -194,8 +380,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       personaCache.delete(firstKey);
     }
   }
+  const personasMs = Date.now() - tPersonas;
   const tDb = Date.now();
-  const dbMs = tDb - tAuth;
+  const dbMs = tDb - tParse; // wave + stt-wait + personas (overlapped stages)
 
   const encoder = new TextEncoder();
   const abortSignal = request.signal;
@@ -215,13 +402,23 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const L: Record<string, any> = {};
       L.authMs = tAuth - t0;
+      L.parseMs = tParse - tAuth; // request-body read (multipart upload)
       L.dbMs = dbMs;
+      L.personasMs = personasMs;
+      L.waveCached = wave.at > t0 - WAVE_CACHE_TTL_MS && wave.at < t0; // cache hit on this turn
+      L.waveFetchMs = wave.fetchMs;
+      L.sttMs = sttResult?.ms ?? null;
+
+      // The teacher's confirmed transcript goes out FIRST (banner + chat)
+      // — for the inline-STT (multipart) path this is the moment the
+      // browser learns what Whisper heard.
+      send({ type: "transcript", text: teacherText, viaInlineStt: Boolean(audioFile) });
 
       try {
         // -----------------------------------------------------------
         // Memory structures (mirror of the legacy route, capped input).
         // -----------------------------------------------------------
-        const chronologicalEvents = [...((eventsRes.data ?? []) as unknown[])].reverse() as Array<{
+        const chronologicalEvents = [...waveEvents].reverse() as Array<{
           actor: string | null;
           content: string | null;
           event_type: string;
@@ -588,29 +785,68 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         let audioChunkIndex = 0;
         let ttsFirstChunkStart = Date.now();
 
+        const sendAudioChunk = (
+          buffer: Buffer,
+          mime: string,
+          candidate: { personaId: string; name: string }
+        ) => {
+          send({
+            type: "audio",
+            personaId: candidate.personaId,
+            name: candidate.name,
+            index: audioChunkIndex++,
+            mime,
+            b64: buffer.toString("base64"),
+          });
+        };
+
+        const markFirstAudio = () => {
+          if (!firstAudioEnqueued) {
+            firstAudioEnqueued = true;
+            L.ttsFirstMs = Date.now() - ttsFirstChunkStart;
+            L.ttfaServerMs = Date.now() - t0;
+          }
+        };
+
         const synthesizeAndSendChunk = async (
           text: string,
           candidate: { personaId: string; name: string },
           personaVoice: PersonaVoice | undefined,
           dialectForVoice: string
         ): Promise<boolean> => {
+          // LATENCY: chunk 0 streams — Fish returns raw MP3 frames as they
+          // are synthesized (measured first-bytes ≈ 430-480ms vs 700-2400ms
+          // for the full buffer). A ~1.2s frame-aligned prefix is flushed
+          // the moment it arrives; the remainder follows as a gapless
+          // follow-up chunk. Later chunks keep 128kbps "normal" quality —
+          // they hide under playback anyway.
+          if (!firstAudioEnqueued) {
+            let anySent = false;
+            const result = await synthesizeStudentSpeechStreaming(
+              text,
+              candidate.name,
+              dialectForVoice,
+              personaVoice,
+              (prefix, mime) => {
+                sendAudioChunk(prefix, mime, candidate);
+                anySent = true;
+                markFirstAudio();
+              },
+              { fishLatencyMode: "balanced", fishMp3Bitrate: 64 }
+            );
+            if (result.buffer && result.buffer.length > 0) {
+              sendAudioChunk(result.buffer, result.contentType, candidate);
+              anySent = true;
+              markFirstAudio();
+            }
+            return anySent;
+          }
           const audio = await synthesizeStudentSpeech(text, candidate.name, undefined, dialectForVoice, personaVoice, {
-            fishLatencyMode: firstAudioEnqueued ? "normal" : "balanced",
+            fishLatencyMode: "normal",
+            fishMp3Bitrate: 128,
           });
           if (!audio || audio.buffer.length === 0) return false;
-          send({
-            type: "audio",
-            personaId: candidate.personaId,
-            name: candidate.name,
-            index: audioChunkIndex++,
-            mime: audio.contentType,
-            b64: audio.buffer.toString("base64"),
-          });
-          if (!firstAudioEnqueued) {
-            firstAudioEnqueued = true;
-            L.ttsFirstMs = Date.now() - ttsFirstChunkStart;
-            L.ttfaServerMs = Date.now() - t0;
-          }
+          sendAudioChunk(audio.buffer, audio.contentType, candidate);
           return true;
         };
 
@@ -629,9 +865,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           dialect: sessionDialect,
         });
 
+        let classroomSilence = false;
         if (plan.isSilent) {
           // SILENCE IS A VALID ACTION — cards update, no audio, explicit
           // client-side "students listened" feedback (no silent failure).
+          classroomSilence = true;
           if (!persistencePromise) persistencePromise = persistTurn();
           await persistencePromise;
         } else {
@@ -640,6 +878,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           if (explicitTarget) speakers = speakers.filter((c) => c.personaId === explicitTarget.personaId);
 
           if (speakers.length === 0) {
+            classroomSilence = true;
             if (!persistencePromise) persistencePromise = persistTurn();
             await persistencePromise;
           } else {
@@ -687,7 +926,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   reasonToSpeak: candidate.reasonToSpeak,
                   lessonContext: plan.isGreeting ? null : session.lesson_context ?? null,
                   teacherUtterance: teacherText,
-                  recentHistory: recentHistory.slice(-3500),
+                  recentHistory: recentHistory.slice(-900),
                   currentQuestionText: plan.currentQuestionText,
                   targetConceptAspect: plan.qContext.targetConceptAspect,
                   teacherTitle: plan.cleanTitle,
@@ -823,14 +1062,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         if (!persistencePromise) persistencePromise = persistTurn();
         await persistencePromise;
 
+        // Our own writes just landed — refresh the session's DB wave so
+        // the NEXT turn reads fresh events from the instance cache.
+        refreshWave(sessionId, auth.row);
+
         L.totalMs = Date.now() - t0;
         L.chunks = audioChunkIndex;
         const questionTypeFinal = await classifyPromise;
-        send({ type: "done", questionType: questionTypeFinal, latency: L });
+        send({ type: "done", questionType: questionTypeFinal, latency: L, classroomSilence });
 
         // Hard per-stage instrumentation — always logged server-side.
         console.log(
           `[TurnStream:${sessionId.slice(0, 8)}] ttfa=${L.ttfaServerMs ?? "-"}ms auth=${L.authMs}ms db=${L.dbMs}ms ` +
+            `wave=${L.waveCached ? "cache" : "fresh"} stt=${L.sttMs ?? "-"}ms ` +
             `route=${L.routingMs}ms llm1st=${L.llmFirstTokenMs ?? "-"}ms sent1=${L.firstSentenceMs ?? "-"}ms ` +
             `tts0=${L.ttsFirstMs ?? "-"}ms chunks=${L.chunks ?? 0} total=${L.totalMs}ms model=${L.model ?? "fast/fallback"} ` +
             `target=${explicitTarget ? explicitTarget.name : routing.targetName ?? "-"}`

@@ -125,10 +125,22 @@ export function createSentenceChunker(onChunk: (text: string, index: number) => 
   function attemptCut(isFinal: boolean) {
     const t = buf;
     if (index === 0) {
-      // LATENCY-CRITICAL first chunk: prefer an EARLY sentence ender, then
-      // an early clause comma, then any ender inside the window, then a
-      // hard word-boundary cut. A single ender sitting past the window
-      // must NOT swallow the whole reply into chunk 0.
+      // LATENCY-CRITICAL first chunk. Ordered by speed:
+      //   1. ULTRA-EARLY word-boundary cut at ≥12 chars — 2-3 Arabic words
+      //      are already a natural spoken interjection; Fish synthesis of
+      //      a tiny chunk is proportionally faster too.
+      //   2. An early sentence ender (., !, ؟) inside the window.
+      //   3. An early clause comma «،».
+      //   4. Hard word-boundary cut at 40 chars.
+      // A single ender sitting past the window must NOT swallow the whole
+      // reply into chunk 0.
+      if (t.length >= 12) {
+        const sp = t.indexOf(" ", 12);
+        if (sp > 12 && sp <= 26) {
+          emitUpTo(sp + 1);
+          return;
+        }
+      }
       const m = SENTENCE_END.exec(t);
       const enderPos = m ? m.index : -1;
       if (enderPos >= 4 && enderPos <= 40) {
@@ -139,7 +151,7 @@ export function createSentenceChunker(onChunk: (text: string, index: number) => 
         return;
       }
       const comma = t.indexOf("،");
-      if (comma >= 8 && comma <= 55) {
+      if (comma >= 8 && comma <= 45) {
         emitUpTo(comma + 1);
         return;
       }
@@ -150,9 +162,9 @@ export function createSentenceChunker(onChunk: (text: string, index: number) => 
         emitUpTo(end);
         return;
       }
-      if (t.length >= 55) {
-        const sp = t.lastIndexOf(" ", 55);
-        emitUpTo(sp > 20 ? sp : 55);
+      if (t.length >= 40) {
+        const sp = t.lastIndexOf(" ", 40);
+        emitUpTo(sp > 18 ? sp : 40);
       }
       return;
     }
