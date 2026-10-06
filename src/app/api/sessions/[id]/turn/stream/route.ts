@@ -906,7 +906,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
               const pendingTts: Promise<unknown>[] = [];
               ttsFirstChunkStart = Date.now();
 
-              const chunker = createSentenceChunker((chunkText) => {
+              // The chunker/extractor pair is RECREATABLE: when the LLM
+              // chain restarts on another model mid-stream (walk + reset),
+              // already-played audio stays and the reply restarts cleanly
+              // — no duplicated text in the new attempt's pipeline.
+              let chunker = createSentenceChunker((chunkText) => {
                 pendingTts.push(
                   synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice).then((ok) => {
                     if (ok) anyAudioSent = true;
@@ -947,10 +951,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   `${studentPrompt}\n\nرد بصيغة JSON فقط بهذا الشكل تماماً:\n{\n  "text": "كلام الطالب المنطوق هنا فقط"\n}` +
                   `\nمهم للسرعة: ابدأ نص "text" بجملة قصيرة جداً (كلمة إلى ثلاث كلمات مثل «أيوه يا مستر!» أو «صراحة مش متأكد») ثم أكمل باقي الرد.`;
 
-                const extractor = createJsonTextFieldExtractor("text");
+                let extractor = createJsonTextFieldExtractor("text");
                 const tLlmOpen = Date.now();
                 let sawFirstToken = false;
                 let sawFirstChunk = false;
+                // Partial text already forwarded (and likely spoken) by an
+                // attempt that later died — kept so the final speech text
+                // matches what the class actually heard.
+                let salvagedFromFailedAttempts = "";
                 try {
                   const result = await callGroqStreamWithFallback(
                     {
@@ -976,10 +984,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                         }
                       }
                     },
-                    { signal: abortSignal }
+                    {
+                      signal: abortSignal,
+                      // Mid-stream provider failure ⇒ chain walks to the next
+                      // model and this pipeline restarts CLEAN (the partial
+                      // attempt's unspoken buffer is discarded; any audio
+                      // already played stays as a natural interjection).
+                      onAttemptReset: () => {
+                        salvagedFromFailedAttempts = extractor.text.trim() || salvagedFromFailedAttempts;
+                        extractor = createJsonTextFieldExtractor("text");
+                        chunker = createSentenceChunker((chunkText) => {
+                          pendingTts.push(
+                            synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice).then((ok) => {
+                              if (ok) anyAudioSent = true;
+                            })
+                          );
+                        });
+                      },
+                    }
                   );
                   L.model = result.model;
                   if (result.attempts && result.attempts.length > 0) L.llmWalk = result.attempts;
+                  if (result.restarts) L.llmRestarts = result.restarts;
                   chunker.flush();
                   await Promise.all(pendingTts);
 
@@ -1013,7 +1039,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     // attempt (mid-stream provider failure), keep whatever
                     // complete text the extractor decoded — the student's
                     // answer beats a canned fallback line.
-                    const salvaged = extractor.text.trim();
+                    const salvaged = extractor.text.trim() || salvagedFromFailedAttempts;
                     fullRawText = salvaged.length >= 3 ? salvaged : null;
                   }
                 }

@@ -162,7 +162,7 @@ function isModelUnavailable(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
   if (status === 404 || status === 403 || status === 429 || status === 503) return true;
   const msg = err instanceof Error ? err.message : "";
-  return (
+  if (
     /does not exist|not found|decommissioned|sunset|no longer (?:available|supported)|you do not have access/i.test(
       msg
     ) ||
@@ -170,7 +170,13 @@ function isModelUnavailable(err: unknown): boolean {
     // chance (observed in production 2026-10: gpt-oss json_object mode can
     // fail per-prompt even though the model itself is healthy).
     /failed to generate json/i.test(msg)
-  );
+  ) {
+    return true;
+  }
+  // Mid-stream transport failures (socket reset mid-SSE). The caller's
+  // onAttemptReset hook keeps these safe to retry on the next model; user
+  // aborts are filtered out BEFORE this check (AbortError/TimeoutError).
+  return /terminated|other side closed|socket hang up|ECONNRESET|EPIPE|fetch failed|network error/i.test(msg);
 }
 
 /** Short, secret-free error signature for latency/dev instrumentation. */
@@ -232,11 +238,12 @@ export async function callGroqWithFallback(
 export async function callGroqStreamWithFallback(
   params: ChatParams,
   onDelta: (textDelta: string) => void,
-  options?: { signal?: AbortSignal }
-): Promise<{ text: string; model: string; attempts?: string[] }> {
+  options?: { signal?: AbortSignal; onAttemptReset?: () => void }
+): Promise<{ text: string; model: string; attempts?: string[]; restarts?: number }> {
   const chain = await resolveChatChain();
   let lastError: unknown = null;
   const attempts: string[] = [];
+  let restarts = 0;
 
   for (const model of chain) {
     let forwardedDeltas = 0; // tokens already handed to the caller's pipeline
@@ -269,7 +276,7 @@ export async function callGroqStreamWithFallback(
           throw new DOMException("Aborted", "AbortError");
         }
       }
-      return { text, model, attempts };
+      return { text, model, attempts, restarts };
     } catch (err: unknown) {
       lastError = err;
       if (options?.signal?.aborted) throw err;
@@ -277,12 +284,18 @@ export async function callGroqStreamWithFallback(
       if (isModelUnavailable(err)) {
         const status = (err as { status?: number })?.status;
         const msg = String((err as { message?: string })?.message ?? "");
-        // WALK SAFETY: once ANY content token has been forwarded the
-        // caller's extractor/chunker/TTS pipeline holds user-visible
-        // state — restarting with another model would duplicate text.
-        // Fail instead; the route salvages the partial reply.
+        // WALK SAFETY: if tokens were already forwarded, the caller's
+        // extractor/chunker/TTS pipeline holds user-visible state. With an
+        // onAttemptReset hook the caller discards that state cleanly
+        // (already-played audio stays; the reply restarts from the next
+        // model) — without the hook we must fail to avoid duplicated text.
         if (forwardedDeltas > 0) {
-          throw err;
+          if (options?.onAttemptReset) {
+            options.onAttemptReset();
+            restarts += 1;
+          } else {
+            throw err;
+          }
         }
         attempts.push(`${model}→${status ?? "?"}:${msg.slice(0, 60)}`);
         console.warn(`Groq stream model ${model} failed (${status}: ${msg.slice(0, 120)}), trying next fallback model...`);

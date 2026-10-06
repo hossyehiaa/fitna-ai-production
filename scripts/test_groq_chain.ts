@@ -40,18 +40,39 @@ async function main() {
 
 let mainDone = false;
 
-/** Mid-stream failure: forwarded deltas > 0 ⇒ must THROW, never walk. */
+/** Mid-stream failure with reset hook: walk to next model, full text, no dup. */
 async function midstreamTest() {
   const deltas: string[] = [];
+  let resets = 0;
+  const result = await callGroqStreamWithFallback(
+    { messages: [{ role: "user", content: "x" }] },
+    (d) => deltas.push(d),
+    {
+      onAttemptReset: () => {
+        resets += 1;
+      },
+    }
+  );
+  if (result.model !== "llama-3.1-8b-instant") throw new Error(`expected walk to llama-3.1-8b-instant, got ${result.model}`);
+  if (resets !== 1) throw new Error(`expected exactly 1 reset, got ${resets}`);
+  if ((result.restarts ?? 0) !== 1) throw new Error(`expected restarts=1, got ${result.restarts}`);
+  if (!result.text.includes("text")) throw new Error("final text incomplete after reset walk");
+  if (!result.attempts?.length) throw new Error("attempts trace missing");
+  console.log(
+    `✅ mid-stream failure: reset (${resets}x) + walked to ${result.model}, full text recovered, attempts=${JSON.stringify(result.attempts)}`
+  );
+}
+
+/** Mid-stream failure WITHOUT reset hook: must throw (legacy safety). */
+async function midstreamNoHookTest() {
   let threw = false;
   try {
-    await callGroqStreamWithFallback({ messages: [{ role: "user", content: "x" }] }, (d) => deltas.push(d));
+    await callGroqStreamWithFallback({ messages: [{ role: "user", content: "x" }] }, () => {});
   } catch {
     threw = true;
   }
-  if (!threw) throw new Error("mid-stream failure was swallowed — should have thrown!");
-  if (deltas.length === 0) throw new Error("expected partial deltas before the failure");
-  console.log(`✅ mid-stream failure threw (after ${deltas.length} deltas) instead of walking`);
+  if (!threw) throw new Error("mid-stream failure without reset hook was swallowed — should have thrown!");
+  console.log("✅ mid-stream failure without hook threw (no-duplication safety preserved)");
 }
 
 async function runAll() {
@@ -63,7 +84,7 @@ async function runAll() {
 
 // MOCK_MIDSTREAM env is set by the runner for this phase.
 if (process.env.MOCK_MIDSTREAM) {
-  midstreamTest()
+  Promise.all([midstreamTest(), midstreamNoHookTest()])
     .then(() => console.log("\n✅ ALL PHASES PASSED"))
     .catch((e) => {
       console.error("❌", e);
