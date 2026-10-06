@@ -100,6 +100,47 @@ export async function GET(request: Request) {
     await preloadGroqModels()
     probe.discoveredCache = discoveredModelIds()
 
+    // 4) TURN-SHAPE matrix — the exact parameter combinations the real
+    //    turn route sends (whichever of these fails is the turn-killer).
+    const turnShape = async (
+      label: string,
+      model: string,
+      params: Record<string, unknown>
+    ): Promise<void> => {
+      try {
+        const c = (await groq.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: 'قل: تمام' }],
+          max_completion_tokens: 30,
+          ...params,
+        } as Parameters<typeof groq.chat.completions.create>[0])) as {
+          choices?: Array<{ message?: { content?: string } }>
+        }
+        ;(probe.turnShapes as Record<string, unknown>)[label] = {
+          ok: true,
+          sample: (c.choices?.[0]?.message?.content ?? '').replace(/\s+/g, ' ').slice(0, 40),
+        }
+      } catch (err) {
+        ;(probe.turnShapes as Record<string, unknown>)[label] = { ok: false, err: groqErrorSignature(err) }
+      }
+    }
+    probe.turnShapes = {}
+    for (const model of ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'allam-2-7b']) {
+      const short = model.split('/').pop() || model
+      await turnShape(`${short}+temp065`, model, { temperature: 0.65 })
+      await turnShape(`${short}+json`, model, { response_format: { type: 'json_object' } })
+      await turnShape(`${short}+temp+json`, model, { temperature: 0.65, response_format: { type: 'json_object' } })
+      await turnShape(
+        `${short}+full-turn`,
+        model,
+        {
+          temperature: 0.65,
+          response_format: { type: 'json_object' },
+          ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' as const } : {}),
+        }
+      )
+    }
+
     payload.probe = probe
   }
 
