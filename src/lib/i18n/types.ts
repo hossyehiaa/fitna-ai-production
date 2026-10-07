@@ -32,6 +32,8 @@ export interface Dictionary {
     disengaged: string;
   };
   nav: {
+    about: string;
+    manual: string;
     dashboard: string;
     growth: string;
     history: string;

@@ -8,6 +8,7 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { signOutAction } from "@/app/(auth)/login/actions";
 import { getDictionary, type Language } from "@/lib/i18n";
 import { SettingsModal } from "./SettingsModal";
+import { OnboardingTour } from "./OnboardingTour";
 import { Sparkles } from "lucide-react";
 
 type Profile = {
@@ -70,6 +71,8 @@ export function TeacherDashboardClient({
       className="bg-[#F6F0E4] dark:bg-[#05142B] text-[#071B3A] dark:text-white font-readex antialiased min-h-screen flex flex-col selection:bg-[#12B8C4]/20 selection:text-[#071B3A] transition-colors"
       dir={isRtl ? "rtl" : "ltr"}
     >
+      {/* First-visit onboarding walkthrough (replayable from Settings). */}
+      <OnboardingTour lang={lang} />
       {/* Sticky Nile Top Navigation Bar with Official Logo & Animation */}
       <nav className="bg-[#071B3A]/95 backdrop-blur-md text-[#F6F0E4] border-b border-[#F6F0E4]/10 sticky top-0 z-30 shadow-md transition-all duration-300 relative after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[1px] after:bg-gradient-to-r after:from-transparent after:via-[#12B8C4]/40 after:to-transparent">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">

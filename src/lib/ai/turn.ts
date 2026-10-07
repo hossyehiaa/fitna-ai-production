@@ -3,7 +3,7 @@ import { parseEmotion, type Emotion } from "@/lib/llm/emotion";
 import { buildClassroomSwarmSystemPrompt, buildQuestionClassifierPrompt, buildCandidateStudentPrompt } from "@/lib/ai/personas";
 import type { Database } from "@/lib/supabase/types";
 import { StudentBrainState, StudentPhysicalAction, initializeStudentBrain, getActionDescription } from "@/lib/simulation/classroomState";
-import { analyzeTeacherIntent, decideClassroomReaction, DecisionResult } from "@/lib/simulation/decisionEngine";
+import { analyzeTeacherIntent, decideClassroomReaction, DecisionResult, NON_QUESTION_INTENTS } from "@/lib/simulation/decisionEngine";
 import { parseDialect, teacherTitleForDialect, normalizeMsaToSaudi, type Dialect } from "@/lib/ai/dialects";
 import { saudiReply, repairSaudiDialect, hasEgyptianMarkers } from "@/lib/ai/saudi-replies";
 
@@ -721,6 +721,16 @@ export function ritualFastReply(
   dialect: Dialect,
   cleanTitle: string
 ): string | null {
+  // Re-greeting / directed check-in AFTER the opening greeting already
+  // completed («ازيك يا فهد»، «كيفكم تاني؟») — instant warm reply, zero LLM
+  // latency, zero hallucination. Silence here made the class feel deaf.
+  if (intentAnalysis.intent === "casual_conversation" && intentAnalysis.isGreetingLike) {
+    if (dialect === "saudi") {
+      return `الحمد لله ${cleanTitle} تمام، أنت كيفك؟`;
+    }
+    return `الحمد لله ${cleanTitle} تمام، حضرتك عامل${cleanTitle.includes("ميس") ? "ة" : ""} إيه؟`;
+  }
+
   if (intentAnalysis.intent === "greeting") {
     if (dialect === "saudi") {
       if (/صباح\s*الخير/i.test(teacherUtterance)) {
@@ -732,7 +742,11 @@ export function ritualFastReply(
       if (/سلام/i.test(teacherUtterance)) {
         return `وعليكم السلام ${cleanTitle}! الحمد لله تمام.`;
       }
-      if (/كيف\s*(?:حالكم|حالك|القلوب)|عاملين|اخباركم/i.test(teacherUtterance)) {
+      if (/كيف\s*(?:حالكم|حالك|القلوب)|عاملين|اخباركم|كيفكم/i.test(teacherUtterance)) {
+        return `الحمد لله ${cleanTitle} تمام، وأنت كيفك؟`;
+      }
+      // Directed singular check-ins («ازيك يا فهد» / «كيفك يا ريم؟»)
+      if (/ازيك|ازيكي|كيفك|اخبارك|عامل\s*ايه|عاملة\s*ايه/i.test(teacherUtterance)) {
         return `الحمد لله ${cleanTitle} تمام، وأنت كيفك؟`;
       }
       if (/سامعيني|صوتي\s*واضح/i.test(teacherUtterance)) {
@@ -749,7 +763,11 @@ export function ritualFastReply(
     if (/سلام/i.test(teacherUtterance)) {
       return `وعليكم السلام ${cleanTitle}! الحمد لله كويسين.`;
     }
-    if (/عاملين\s*(?:ايه|إيه|اي)|ازيكم|ازيكو/i.test(teacherUtterance)) {
+    if (/عاملين\s*(?:ايه|إيه|اي)|ازيكم|ازيكو|كيفكم|اخباركم/i.test(teacherUtterance)) {
+      return `الحمد لله ${cleanTitle} تمام، حضرتك عامل${cleanTitle.includes("ميس") ? "ة" : ""} إيه؟`;
+    }
+    // Directed singular check-ins («ازيك يا عمر» / «كيفك يا سارة؟»)
+    if (/ازيك|ازيكي|كيفك|اخبارك|عامل\s*ايه|عاملة\s*ايه/i.test(teacherUtterance)) {
       return `الحمد لله ${cleanTitle} تمام، حضرتك عامل${cleanTitle.includes("ميس") ? "ة" : ""} إيه؟`;
     }
     if (/سامعيني|صوتي\s*واضح/i.test(teacherUtterance)) {
@@ -849,6 +867,9 @@ export async function generateStudentReactions(params: {
       targetConceptAspect: qContext.targetConceptAspect,
       teacherTitle: cleanTitle,
       isTargetStudent: true,
+      // Greetings/praise/commands are NOT questions — the prompt forbids
+      // fabricating an answer to a question that was never asked.
+      utteranceIsQuestion: !NON_QUESTION_INTENTS.has(intentAnalysis.intent),
       activeMisconception: candidate.activeMisconception,
       teacherExplanations,
       studentContributions,
@@ -878,9 +899,14 @@ export async function generateStudentReactions(params: {
         maxTokens: 150, // §4: short replies = realism + speed
       });
 
-      const raw = completion.text ?? "{}";
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+      // Fence-tolerant parse: some fallback models wrap the JSON in
+      // ```json fences (seen live from gemini-2.5-pro) and a maxTokens cut
+      // can leave a truncated body — strip fences first, then brace-match.
+      const rawFenced = (completion.text ?? "")
+        .replace(/```[a-zA-Z]*\s*/g, "")
+        .trim();
+      const jsonMatch = rawFenced.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawFenced);
       if (typeof parsed.text === "string" && parsed.text.trim().length > 0) {
         const { emotion, clean } = parseEmotion(parsed.text.trim());
         if (clean.length > 0) return { text: clean, emotion };
@@ -976,6 +1002,26 @@ export async function generateStudentReactions(params: {
       }
       if (qContext.isWhyQuestion) return saudiReply("why_question", { personaName: p.name, title: cleanTitle });
       if (qContext.isComparison) return saudiReply("comparison", { personaName: p.name, title: cleanTitle });
+      // Context-aware answers (mirror the Egyptian bank's lesson branches so
+      // an LLM outage still yields CONTENT, not the vague «أعتقد الجواب كذا»
+      // that looked exactly like a hallucinated answer on live production).
+      if (isNumeratorDenominatorQuestion) {
+        return `اللي فوق البسط واللي تحت المقام ${cleanTitle}.`;
+      }
+      if (isClimateLesson && /(?:اسمه|يعني|إيه|ايه|ليه|وشو)/i.test(currentQuestionText)) {
+        return `التغير المناخي يعني إن درجات الحرارة بتتغير في كوكبنا ${cleanTitle}.`;
+      }
+      if (isClimateLesson) {
+        return `الجو يسخن أكثر من اللازم ويتغير الطقس ${cleanTitle}.`;
+      }
+      if (isMatterStateQuestion) {
+        return /(?:هواء|غاز)/i.test(currentQuestionText)
+          ? `الهواء مادة غازية ملهاش شكل ثابت ${cleanTitle}.`
+          : `المادة الصلبة شكلها ثابت والمية سائلة بتاخد شكل الإناء ${cleanTitle}.`;
+      }
+      if (qContext.fractions.length >= 2 && !qContext.hasUnlikeDenominators) {
+        return `اللي بسطه أكبر هو أكبر لما تكون المقامات متساوية ${cleanTitle}.`;
+      }
       return saudiReply("direct_question", { personaName: p.name, title: cleanTitle });
     })();
 

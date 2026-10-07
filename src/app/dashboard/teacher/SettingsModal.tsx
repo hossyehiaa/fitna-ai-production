@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { SettingsForm } from "@/app/settings/SettingsForm";
 import { useTranslation } from "@/lib/i18n/context";
+import { Sparkles } from "lucide-react";
 
 type Profile = {
   full_name: string | null;
@@ -91,6 +92,29 @@ export function SettingsModal({
         {/* Scrollable Modal Body */}
         <div className="p-6 sm:p-8 space-y-6 overflow-y-auto overscroll-contain">
           <SettingsForm profile={profile} />
+
+          {/* Replay the first-visit platform walkthrough */}
+          <div className="pt-2 border-t border-[#071B3A]/10 dark:border-white/10">
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.removeItem("fitna_onboarding_done");
+                } catch {}
+                onClose();
+                window.dispatchEvent(new Event("fitna:replay-onboarding"));
+              }}
+              className="w-full px-4 py-3 rounded-xl border border-[#12B8C4]/40 text-[#12B8C4] text-xs font-bold hover:bg-[#12B8C4]/10 transition cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Sparkles size={14} />
+              {isRtl ? "إعادة تشغيل الجولة التعريفية للمنصة" : "Replay the platform walkthrough"}
+            </button>
+            <p className="mt-2 text-center text-[11px] text-[#071B3A]/40 dark:text-white/40">
+              {isRtl
+                ? "شرح سريع بخطوات: تجهيز الجلسة، المايك، مقاطعة الطلاب، والتقرير."
+                : "A quick step-by-step recap: session setup, mic, barge-in, and the report."}
+            </p>
+          </div>
         </div>
 
         {/* Modal Footer Controls */}

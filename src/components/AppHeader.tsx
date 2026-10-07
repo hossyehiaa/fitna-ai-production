@@ -24,6 +24,18 @@ export function AppHeader({ title }: { title?: string }) {
         <ThemeToggle />
         <LanguageSwitcher />
         <Link
+          href="/about"
+          className="text-[#071B3A]/70 dark:text-white/70 hover:text-[#071B3A] dark:hover:text-white text-xs font-medium"
+        >
+          {t.nav.about}
+        </Link>
+        <Link
+          href="/manual"
+          className="text-[#071B3A]/70 dark:text-white/70 hover:text-[#071B3A] dark:hover:text-white text-xs font-medium hidden sm:block"
+        >
+          {t.nav.manual}
+        </Link>
+        <Link
           href="/settings"
           className="text-[#071B3A]/70 dark:text-white/70 hover:text-[#071B3A] dark:hover:text-white text-xs font-medium"
         >

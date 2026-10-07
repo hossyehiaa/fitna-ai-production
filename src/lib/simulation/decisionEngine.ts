@@ -47,6 +47,10 @@ export interface TeacherAnalysis {
   difficultyLevel: "easy" | "medium" | "hard";
   tone: "encouraging" | "neutral" | "strict";
   isCorrective?: boolean;
+  /** True when the utterance is a social greeting/check-in («ازيك يا فهد»،
+   * «كيفكم يا عيال؟») — such utterances ALWAYS get a warm reply, never
+   * silence, never a fabricated answer to a nonexistent question. */
+  isGreetingLike?: boolean;
 }
 
 export interface DecisionResult {
@@ -98,6 +102,16 @@ function isRepeatedUtterance(current: string, previous?: string | null): boolean
   return c1 === c2;
 }
 
+/** Social greetings & check-ins (singular + plural, whole-class or directed).
+ * A repeated greeting is a VALID utterance to answer again — teachers repeat
+ * greetings precisely when the class felt silent; answering beats silence. */
+const GREETING_LIKE_RE =
+  /(?<=^|[\s.,?!،؛:])(عامل\s*(?:ايه|إيه|اي)|عاملة\s*(?:ايه|إيه|اي)|عاملين\s*(?:ايه|إيه|اي)|ازيكم|ازيكو|ازيك|ازيكي|كيفك|كيفكم|كيف\s*حالك|كيف\s*حالكم|اخبارك|اخباركو|اخباركم|صباح\s*الخير|مساء\s*الخير|سلام\s*عليكم|السلام\s*عليكم|سلامو\s*عليكم|أهلاً|اهلا|هلا|مرحبا|مرحبتين|سامعيني|صوتي\s*واضح)(?=[\s.,?!،؛:]|$)/i;
+
+function isGreetingLikeUtterance(normalizedClean: string): boolean {
+  return GREETING_LIKE_RE.test(normalizedClean) && normalizedClean.split(/\s+/).length <= 15;
+}
+
 /**
  * 1. Rule & Semantic Intent Analyzer (Context-Aware, Preventing Repetition & Loops)
  */
@@ -109,9 +123,12 @@ function _analyzeTeacherIntentInternal(
 
   const hasQuestionWord = /(?:مين|إيه|ايه|ليه|إزاي|ازاي|كام|كم|فين|منين|هل|قول|قولي|جاوب|جاوبي|حل)/i.test(clean);
   const hasStudentName = /(?:عمر|عمار|سار[ةه]|ياسين|نور)/i.test(clean);
+  const greetingLike = isGreetingLikeUtterance(clean);
 
   // 1. Check Repeated Utterance (Teacher said virtually the same statement again, without naming a student or asking a question)
-  if (!hasStudentName && !hasQuestionWord && isRepeatedUtterance(teacherText, context?.lastTeacherUtterance)) {
+  // NOTE: a repeated GREETING is exempted — the class greets back again
+  // (politely, maybe with a different wording) instead of going silent.
+  if (!greetingLike && !hasStudentName && !hasQuestionWord && isRepeatedUtterance(teacherText, context?.lastTeacherUtterance)) {
     return {
       intent: "repeated_statement",
       calledStudents: [],
@@ -443,6 +460,24 @@ function _analyzeTeacherIntentInternal(
     };
   }
 
+  // 4b6. DIRECTED GREETING OVERRIDE («ازيك يا فهد» / «كيفك يا ريم؟» /
+  // «صباح الخير يا سلطان») — a greeting that names a student is STILL a
+  // greeting: the called student greets back warmly. This MUST run BEFORE
+  // the generic direct-call branch below, or every directed greeting gets
+  // processed with question machinery and answered with a fabricated
+  // «أعتقد الجواب كذا...» (the exact production bug report).
+  if (greetingLike) {
+    return {
+      intent: context?.greetingCompleted ? "casual_conversation" : "greeting",
+      calledStudents,
+      excludedStudents,
+      targetStudentName,
+      conceptTaught: null,
+      difficultyLevel: "easy",
+      tone: "encouraging",
+    };
+  }
+
   // Direct Call to Specific Student (Teacher named someone specifically!)
   if (calledStudents.length > 0) {
     return {
@@ -509,9 +544,11 @@ function _analyzeTeacherIntentInternal(
   }
 
   // 8. Greetings, Social Check-ins & Audio Checks (Pure greetings & audio tests)
-  const isPureGreeting =
-    /(?<=^|[\s.,?!،؛:])(عاملين\s*(?:ايه|إيه|اي)|ازيكم|ازيكو|صباح\s*الخير|مساء\s*الخير|سلام\s*عليكم|السلام\s*عليكم|سلامو\s*عليكم|أهلاً|اهلا|مرحبا|سامعيني|صوتي\s*واضح)(?=[\s.,?!،؛:]|$)/i.test(clean) &&
-    clean.split(/\s+/).length <= 15;
+  // NOTE: covers BOTH whole-class greetings («ازيكم يا عيال») and DIRECTED
+  // greetings («ازيك يا فهد» / «كيفك يا ريم؟») — a directed greeting is still
+  // a greeting, never a question to answer. Singular forms (ازيك/كيفك/اخبارك/
+  // عامل ايه) are as common as the plural ones in real classrooms.
+  const isPureGreeting = greetingLike;
 
   if (isPureGreeting) {
     if (context?.greetingCompleted) {
@@ -623,6 +660,24 @@ function _analyzeTeacherIntentInternal(
   };
 }
 
+/** Intents whose teacher utterance is NOT a question — the student should
+ * react naturally (greet back, acknowledge, comply) and must NEVER invent
+ * an answer. Consumed by the persona prompt builders. */
+export const NON_QUESTION_INTENTS: ReadonlySet<string> = new Set([
+  "greeting",
+  "casual_conversation",
+  "attention_check",
+  "religious_blessing",
+  "session_farewell",
+  "roll_call",
+  "teacher_identity",
+  "teacher_apology",
+  "praise",
+  "scolding",
+  "instruction_command",
+  "repeated_statement",
+]);
+
 export function analyzeTeacherIntent(
   teacherText: string,
   context?: TeacherAnalysisContext
@@ -630,6 +685,10 @@ export function analyzeTeacherIntent(
   const result = _analyzeTeacherIntentInternal(teacherText, context);
   const clean = (teacherText || "").replace(/[إأآا]/g, "ا").trim();
   result.isCorrective = /(?:مش\s*(?:صح|مضبوط|صحيح|كده)|مش\s*قوي|غلط|راجع|فكر\s*تاني|ركز|ليه\s*قلت|لا\s*يا|متأكد|المقامات\s*متساوية|البسط\s*الأكبر|الـ?\s*5\s*أكبر)/i.test(clean);
+  // Social greeting/check-in marker — consulted by the decision engine and
+  // the deterministic reply bank so greetings NEVER trigger silence or a
+  // fabricated answer-to-nothing.
+  result.isGreetingLike = isGreetingLikeUtterance(clean);
   return result;
 }
 
@@ -880,7 +939,12 @@ export function decideClassroomReaction(
   // 4. Greeting (First greeting only: exactly 1 student responds naturally to avoid echo)
   if (analysis.intent === "greeting") {
     const eligible = students.filter((s) => !analysis.excludedStudents.includes(s.name));
-    const greeter = eligible.find((s) => s.name === "سارة") || eligible[0];
+    // A DIRECTED greeting («ازيك يا فهد») is answered by the addressed
+    // student; an open greeting («ازيكم يا عيال») by سارة (or first eligible).
+    const greeter =
+      eligible.find((s) => analysis.calledStudents.includes(s.name)) ||
+      eligible.find((s) => s.name === "سارة") ||
+      eligible[0];
 
     for (const student of students) {
       const copy = { ...student, physicalAction: "attentive" as StudentPhysicalAction };
@@ -973,6 +1037,37 @@ export function decideClassroomReaction(
   }
 
   // 5. Casual Conversation (Greeting already finished) -> Students listen attentively, 0 speakers
+  // EXCEPTION: a social check-in / re-greeting («ازيك يا فهد» after the
+  // opening «السلام عليكم») is NOT small talk to ignore — the addressed
+  // student (or one warm student) replies. Silence here was the root cause
+  // of "the class feels deaf" on follow-up greetings.
+  if (analysis.intent === "casual_conversation" && analysis.isGreetingLike) {
+    const socialTarget =
+      students.find(
+        (s) => analysis.calledStudents.includes(s.name) && !analysis.excludedStudents.includes(s.name)
+      ) ||
+      students.find((s) => !isRecent(s) && !analysis.excludedStudents.includes(s.name)) ||
+      students.find((s) => !analysis.excludedStudents.includes(s.name));
+    for (const student of students) {
+      const copy = { ...student, physicalAction: "attentive" as StudentPhysicalAction };
+      copy.actionDescriptionAr = getActionDescription("attentive", copy.name);
+      const isSpeaker = socialTarget && copy.personaId === socialTarget.personaId;
+      if (isSpeaker) {
+        copy.timesSpoken += 1;
+        copy.lastTurnSpoke = turnIndex;
+        candidateSpeakers.push({
+          personaId: copy.personaId,
+          name: copy.name,
+          shouldSpeak: true,
+          reasonToSpeak: "رد ودّي على اهتمام المعلم بحاله",
+          spokenEmotion: "confident",
+        });
+      }
+      updatedStudents.push({ ...copy, attentionDelta: 5, understandingDelta: 0 });
+    }
+    return { candidateSpeakers, updatedStudents, classroomEvent: null };
+  }
+
   if (analysis.intent === "casual_conversation") {
     for (const student of students) {
       const copy = { ...student, physicalAction: "attentive" as StudentPhysicalAction };

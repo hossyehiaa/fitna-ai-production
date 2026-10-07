@@ -134,6 +134,10 @@ function buildSaudiCandidateStudentPrompt(params: {
   currentQuestionText?: string | null;
   targetConceptAspect?: string | null;
   teacherTitle?: string;
+  /** False when the teacher's utterance is NOT a question (greeting, praise,
+   * command, small talk) — the prompt then forbids inventing an answer and
+   * asks for a natural reaction instead. Defaults to true. */
+  utteranceIsQuestion?: boolean;
   activeMisconception?: {
     conceptKey: string;
     falseBeliefAr: string;
@@ -219,7 +223,7 @@ function buildSaudiCandidateStudentPrompt(params: {
 - لقب المعلم الصارم: ${cleanTitle} (ممنوع مناداة المعلم بأي لقب آخر).
 ${lessonContext ? `محتوى الدرس العام:\n${lessonContext}\n` : ""}${teacherKnowledgeBlock}${ownPastBlock}${peerBlock}${recentHistory ? `سياق الحوار الأخير بين المعلم والطلاب:\n${recentHistory}\n` : ""}
 كلام المعلم الأخير: "${teacherUtterance}"
-${currentQuestionText ? `🚨 السؤال أو النقطة الحالية المطلوب منك الإجابة عليها الآن حصراً: "${currentQuestionText}".\nجاوب على هذه النقطة المحددة فقط ولا تجب على أي سؤال أو أرقام قديمة سابقة!\n` : ""}${targetConceptAspect ? `🎯 المطلوب من السؤال تحديداً: ${targetConceptAspect}. ركز إجابتك على هذا الجانب بالذات.\n` : ""}
+${currentQuestionText && params.utteranceIsQuestion !== false ? `🚨 السؤال أو النقطة الحالية المطلوب منك الإجابة عليها الآن حصراً: "${currentQuestionText}".\nجاوب على هذه النقطة المحددة فقط ولا تجب على أي سؤال أو أرقام قديمة سابقة!\n` : ""}${currentQuestionText && params.utteranceIsQuestion === false ? `⚠️ كلام المعلم الأخير ("${currentQuestionText}") ليس سؤالاً تعليمياً — ردّ طبيعياً على ما قاله فعلًا (تحية/رد فعل/تعليق طفولي عفوي) في جملة قصيرة. يُمنع منعاً باتاً اختلاق إجابة لسؤال لم يُسأل!\n` : ""}${targetConceptAspect ? `🎯 المطلوب من السؤال تحديداً: ${targetConceptAspect}. ركز إجابتك على هذا الجانب بالذات.\n` : ""}
 قواعد التفكير العميق والتفاعل التراكمي الحي:
 1. 🧠 الفهم الحقيقي بدلاً من حفظ الجمل المعلبة: أجب بمضمون وفكرة حقيقية تعبر عما استوعبته كطفل!
 2. 💡 الاستشهاد بشرح المعلم والبناء عليه: "زي ما شرحت لنا يا أستاذ...".
@@ -287,6 +291,10 @@ export function buildCandidateStudentPrompt(params: {
   targetConceptAspect?: string | null;
   teacherTitle?: string;
   isTargetStudent?: boolean;
+  /** False when the teacher's utterance is NOT a question (greeting, praise,
+   * command, small talk) — the prompt then forbids inventing an answer and
+   * asks for a natural reaction instead. Defaults to true (question framing). */
+  utteranceIsQuestion?: boolean;
   activeMisconception?: {
     conceptKey: string;
     falseBeliefAr: string;
@@ -390,7 +398,7 @@ export function buildCandidateStudentPrompt(params: {
 - سبب كلامك الآن: ${reasonToSpeak}.
 - لقب المعلم الصارم: ${cleanTitle} (ممنوع أي لقب آخر).${lessonContext ? `\nمحتوى الدرس العام:\n${lessonContext}` : ""}${teacherKnowledgeBlock}${ownPastBlock}${peerBlock}${recentHistory ? `\nسياق الحوار الأخير بين المعلم والطلاب:\n${recentHistory}` : ""}
 كلام المعلم الأخير: "${teacherUtterance}"
-${currentQuestionText ? `🚨 أجب الآن حصراً على هذه النقطة: "${currentQuestionText}" — ولا تجب على أسئلة أو أرقام قديمة في الحوار!\n` : ""}${targetConceptAspect ? `🎯 ركز إجابتك على: ${targetConceptAspect} دون تشتت.\n` : ""}
+${currentQuestionText && params.utteranceIsQuestion !== false ? `🚨 أجب الآن حصراً على هذه النقطة: "${currentQuestionText}" — ولا تجب على أسئلة أو أرقام قديمة في الحوار!\n` : ""}${currentQuestionText && params.utteranceIsQuestion === false ? `⚠️ كلام المعلم الأخير ("${currentQuestionText}") ليس سؤالاً تعليمياً — ردّ طبيعياً على ما قاله فعلًا (تحية/تعليق عفوي) في جملة قصيرة. يُمنع منعاً باتاً اختلاق إجابة لسؤال لم يُسأل أو البدء في شرح الدرس!\n` : ""}${targetConceptAspect ? `🎯 ركز إجابتك على: ${targetConceptAspect} دون تشتت.\n` : ""}
 قواعدك الخاصة (الباقي مفروض في قواعد الفصل):
 1. ممنوع الكليشيهات المعلبة («عندي فكرة»، «أنا عارف الإجابة»، «كتبت الملاحظة دي في الكشكول») دون إعطاء الإجابة الحقيقية — افهم كلام المعلم وأجب بمضمون حقيقي كطفل.
 2. استشهد بشرح المعلم من سجل الشرح أعلاه («زي ما حضرتك شرحتِ لنا إن...») وبكلام زملائك («أنا متفق مع عمر يا ميس وعايز أزود إن...») — دون تكرار جملتهم بحذافيرها.

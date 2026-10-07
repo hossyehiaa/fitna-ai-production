@@ -3,7 +3,7 @@
 import { useActionState, useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, Eye, EyeOff, ShieldCheck, Sparkles, UserRound, UsersRound } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, Eye, EyeOff, ShieldCheck, Sparkles, UserRound, UsersRound } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { signInAction, signUpAction, requestPasswordResetAction, loginAsDemoAction, type ActionState } from "./actions";
 
@@ -148,7 +148,29 @@ function LoginPageContent() {
   const [country, setCountry] = useState<"EG" | "SA">("EG");
   const [googleComingSoon, setGoogleComingSoon] = useState(false);
 
+  // Google Sign-In: live when GOOGLE_CLIENT_ID/SECRET are configured
+  // (GET /api/auth/google → 302 consent redirect), "coming soon" otherwise.
+  const [googleReady, setGoogleReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/google", { method: "GET" })
+      .then((res) => {
+        if (!cancelled) setGoogleReady(res.status !== 501);
+      })
+      .catch(() => {
+        if (!cancelled) setGoogleReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleGoogleClick = () => {
+    if (googleReady) {
+      window.location.href = "/api/auth/google";
+      return;
+    }
     setGoogleComingSoon(true);
     setTimeout(() => {
       setGoogleComingSoon(false);
@@ -211,9 +233,19 @@ function LoginPageContent() {
             {lang === "ar" ? <ArrowRight size={16} /> : <ArrowLeft size={16} />}
             {t.back}
           </Link>
-          <button className="auth-lang" onClick={flipLang}>
-            {t.language}
-          </button>
+          <div className="flex items-center gap-3">
+            <Link
+              className="auth-back !no-underline"
+              href="/manual"
+              title={lang === "ar" ? "دليل استخدام المنصة خطوة بخطوة" : "Step-by-step platform guide"}
+            >
+              <BookOpen size={15} className="inline-block align-[-2px]" />
+              <span className="ms-1">{lang === "ar" ? "دليل الاستخدام" : "User guide"}</span>
+            </Link>
+            <button className="auth-lang" onClick={flipLang}>
+              {t.language}
+            </button>
+          </div>
         </div>
         <div className="auth-brand-center">
           <img src={logo} alt={lang === "ar" ? "Fitna AI فِطْنَة" : "Fitna AI"} />

@@ -9,7 +9,7 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { signOutAction } from "@/app/(auth)/login/actions";
 import { resolveCharacter } from "@/lib/characters/registry";
 import { useTranslation } from "@/lib/i18n/context";
-import { X, GraduationCap, UserCheck, MessageSquare, Globe } from "lucide-react";
+import { X, GraduationCap, UserCheck, MessageSquare, Globe, Sparkles } from "lucide-react";
 
 type Topic = { id: string; title_ar: string; title_en: string | null };
 type Persona = {
@@ -25,6 +25,58 @@ type Persona = {
 type ClassroomStyle = "balanced" | "disruptive" | "disengaged";
 type TrainingObjective = "socratic_focus" | "talk_time_reduction" | "inclusive_engagement" | "behavior_redirection";
 type ClassroomDialect = "egyptian" | "saudi";
+
+// ---------------------------------------------------------------------
+// Ready-made lesson templates — a first-time teacher can start a full
+// simulation with ONE tap instead of writing a lesson from scratch.
+// Each template fills a realistic, misconception-rich lesson summary the
+// simulation engine already knows how to dramatize (fractions comparison,
+// water cycle, parts of speech...).
+// ---------------------------------------------------------------------
+const LESSON_TEMPLATES = [
+  {
+    id: "fractions",
+    chipTitle: "جمع وطرح الكسور — رياضيات",
+    topicTitle: "جمع وطرح الكسور ذات المقامات المختلفة — سادس ابتدائي",
+    summary:
+      "الدرس: جمع وطرح الكسور ذات المقامات المختلفة (سادس ابتدائي).\nأهداف الدرس: الطالب يوحد المقامات باستخدام المضاعف المشترك الأصغر ثم يجمع ويطرح الكسور الاعتيادية.\nالمفاهيم المفتاحية: البسط والمقام، الكسر المتكافئ، توحيد المقامات، المضاعف المشترك الأصغر.\nتسلسل الشرح: (١) مراجعة سريعة: كسور متكافئة بضرب البسط والمقام في نفس العدد. (٢) مثال محلول: ١/٢ + ١/٣ نوحّد المقام إلى ٦ فتصبح ٣/٦ + ٢/٦ = ٥/٦. (٣) تمرين صفّي: ٢/٣ + ١/٤، وطرح: ٣/٤ − ١/٦. (٤) خرائط ونماذج بصرية لتقسيم قطعة كيك لشرح لماذا يجب تساوي المقامات قبل الجمع.\nأسئلة مقترحة للفصل: ليه بنوحّد المقامات قبل الجمع؟ إيه الفرق بين البسط والمقام؟ مين أكبر ٢/٦ ولا ٥/٦ وليه؟\nأخطاء متوقعة من الطلاب: جمع البسطين والمقامين مباشرة (١/٢ + ١/٣ = ٢/٥)، مقارنة الكسور بالبسط فقط.",
+  },
+  {
+    id: "water-cycle",
+    chipTitle: "دورة الماء — علوم",
+    topicTitle: "دورة الماء في الطبيعة — رابع ابتدائي",
+    summary:
+      "الدرس: دورة الماء في الطبيعة (رابع ابتدائي).\nأهداف الدرس: الطالب يصف مراحل دورة الماء (التبخر ← التكاثف ← الهطول ← الجريان) ويفهم أن كمية الماء على الأرض ثابتة تتغير حالتها فقط.\nالمفاهيم المفتاحية: التبخر، بخار الماء، التكاثف، السحب، الهطول (مطر/ثلج/بَرَد)، الجريان السطحي.\nتسلسل الشرح: (١) تجربة استهلال: كوب ماء في الشمس — فين المية بعد يومين؟ (٢) شرح التبخر بمصادر حياة: ملابس تنشف، بركة مية بتقل. (٣) التكاثف: مرآة الحمام البخارية، قطرات على كوب الشاي. (٤) السحب والهطول ثم رجوع المية للبحار والأنهار.\nأسئلة مقترحة: إيه اللي بيحصل لمية البحر في الجوّ الحر؟ إزاي بتتكون السحب؟ هو المية بتخلص من الأرض يوم؟\nأخطاء متوقعة: الطالب يعتقد إن المية بتطلع للسما وتمطر على طول بدون تكاثف، أو إن المطر مية جديدة مش نفس مية البحر.",
+  },
+  {
+    id: "grammar",
+    chipTitle: "المفعول به — لغة عربية",
+    topicTitle: "المفعول به وعلامات نصبه — خامس ابتدائي",
+    summary:
+      "الدرس: المفعول به وعلامات نصبه (خامس ابتدائي).\nأهداف الدرس: الطالب يحدد المفعول به في الجملة ويميزه عن الفاعل والمبتدأ والخبر، ويعرف علامات نصبه (الفتحة، الألف للأسماء الخمسة، الياء للمثنى وجمع المذكر السالم).\nالمفاهيم المفتاحية: الجملة الفعلية، الفاعل، المفعول به، النصب، الأسماء الخمسة.\nتسلسل الشرح: (١) أمثلة استنتاجية: «شرب الولدُ اللبنَ» — مين اللي شرب؟ ومين اللي اتشرب منه؟ (٢) قاعدة: المفعول به اسم منصوب يدل على من وقع عليه فعل الفاعل. (٣) تدريبات إعراب على السبورة: «زار أحمدُ جدهُ»، «رأيت الفائزَين». (٤) تمييز الفاعل من المفعول بتغيير مواضع الكلام.\nأسئلة مقترحة: عرّف المفعول به، أعرب: «فهمت الدرسَ»، فرّق بين الفاعل والمفعول به في «ساعد محمدٌ خالدًا».\nأخطاء متوقعة: الخلط بين الفاعل والمفعول به، نسيان علامة النصب في الأسماء الخمسة.",
+  },
+  {
+    id: "english",
+    chipTitle: "Past Simple — إنجليزي",
+    topicTitle: "The Past Simple Tense — أول إعدادي",
+    summary:
+      "الدرس: The Past Simple Tense (أول إعدادي).\nObjectives: Students form and use the past simple with regular (-ed) and common irregular verbs, in affirmative, negative (didn't) and question (Did...?) forms.\nKey language: went, ate, drank, saw, played, visited, didn't, Did you...?, yesterday, last week, ago.\nتسلسل الشرح: (١) Warm-up story: ماذا فعلت أمس؟ (٢) Regular verbs: play → played. (٣) Irregular verbs: go → went, eat → ate. (٤) Negative: I didn't play. (٥) Questions: Did you play? Yes, I did.\nأسئلة مقترحة: Give three irregular verbs in the past. Turn «She eats apples» into the past. Make a question with «Did».\nأخطاء متوقعة: استخدام did مع الفعل في الماضي (Did you went?)، نسيان الـ -ed مع الأفعال المنتظمة، إثبات ed على الأفعال الشاذة.",
+  },
+  {
+    id: "climate",
+    chipTitle: "التغير المناخي — دراسات",
+    topicTitle: "التغير المناخي وأثره على كوكب الأرض — خامس ابتدائي",
+    summary:
+      "الدرس: التغير المناخي وأثره (خامس ابتدائي).\nأهداف الدرس: الطالب يفرّق بين الطقس والمناخ، يذكر أسباب التغير المناخي (الغازات الدفيئة، حرق الوقود، إزالة الغابات) ويقترح سلوكيات لحماية الكوكب.\nالمفاهيم المفتاحية: الطقس، المناخ، الغازات الدفيئة، الاحتباس الحراري، البصمة الكربونية، الطاقة المتجددة.\nتسلسل الشرح: (١) الفرق بين الطقس والمناخ بأمثلة من يومنا. (٢) طبقة الغازات الدفيئة كـ«غطاء» للأرض — التسخين الزائد. (٣) مصادر الغازات: عادم السيارات والمصانع. (٤) آثار: ذوبان الجليد وارتفاع البحار وتغير مواسم المطر. (٥) حلول صغيرة بإيدينا: المواصلات العامة، ترشيد الكهرباء، إعادة التدوير.\nأسئلة مقترحة: إيه الفرق بين الطقس والمناخ؟ إيه اللي بيخلي الأرض تسخن أكتر من اللازم؟ إيه حاجة صغيرة تعملها كل يوم تساعد الكوكب؟\nأخطاء متوقعة: الخلط بين تلوث الهواء والاحتباس الحراري، الاعتقاد إن التغير المناخي مجرد «حرارة صيف عادية».",
+  },
+  {
+    id: "free-discussion",
+    chipTitle: "نقاش مفتوح — إدارة صف",
+    topicTitle: "نقاش مفتوح: قواعد الفصل — بداية السنة",
+    summary:
+      "النشاط: نقاش مفتوح لبناء قواعد الفصل مع بداية العام الدراسي (بديل للدرس الأكاديمي — تدريب خالص على إدارة الصف والحوار).\nالهدف التدريبي: توزيع وقت الكلام، إشراك الطلاب الصامتين، التعامل مع المقاطعات والمشاغبات، وتحويل الانتباه المفقود لمشاركة.\nأسئلة مقترحة للفتح: إيه القاعدة اللي تحب تكون في فصلنا؟ ليه أصلاً محتاجين قواعد؟ مين مسؤول عن التزام القواعد — المعلم بس ولا كلنا؟ إيه اللي يحصل لو حد كسر قاعدة؟\nسيناريوهات متوقعة: طالب يقاطع باستمرار، طالب خجول ما يتكلمش، اثنين يبدأوا دردشة جانبية، سؤال خارج الموضوع.",
+  },
+] as const;
 
 function getStudentPreviewAvatar(name: string, avatarKey?: string | null): { key: string; image: string; ringColor: string } {
   // Character identity: DB avatar_key first, deterministic name fallback.
@@ -71,6 +123,7 @@ export function SessionSetupForm({
   const [trainingObjective, setTrainingObjective] = useState<TrainingObjective>("socratic_focus");
   const [contextMode, setContextMode] = useState<"text" | "pdf">("text");
   const [textSummary, setTextSummary] = useState("");
+  const [templateApplied, setTemplateApplied] = useState<string | null>(null);
   const [pdfText, setPdfText] = useState<string | null>(null);
   const [pdfFileName, setPdfFileName] = useState<string | null>(null);
   const [pdfFileSize, setPdfFileSize] = useState<string | null>(null);
@@ -1004,11 +1057,45 @@ export function SessionSetupForm({
             </div>
 
             {contextMode === "text" ? (
-              <div className="relative">
+              <div className="relative space-y-3">
+                {/* Ready-made lesson templates — one tap fills a complete,
+                    realistic lesson summary so first-time users can start a
+                    simulation without writing a lesson from scratch. */}
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-3.5 h-3.5 text-[#12B8C4]" />
+                    <span className="text-xs font-bold text-[#071B3A]/70 dark:text-white/70">
+                      {isRtl ? "قوالب دروس جاهزة — اضغط وابدأ فورًا:" : "Ready-made lesson templates — tap and start:"}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {LESSON_TEMPLATES.map((tpl) => (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        onClick={() => {
+                          setTextSummary(tpl.summary);
+                          if (!selectedTopic) setTopicQuery(tpl.topicTitle);
+                          setTemplateApplied(tpl.id);
+                        }}
+                        className={`px-3 py-1.5 rounded-full text-[11px] font-bold border transition cursor-pointer ${
+                          templateApplied === tpl.id
+                            ? "bg-[#12B8C4] text-white border-[#12B8C4] shadow-sm shadow-[#12B8C4]/25"
+                            : "bg-[#12B8C4]/5 text-[#12B8C4] border-[#12B8C4]/30 hover:bg-[#12B8C4]/15"
+                        }`}
+                      >
+                        {tpl.chipTitle}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <textarea
                   rows={4}
                   value={textSummary}
-                  onChange={(e) => setTextSummary(e.target.value)}
+                  onChange={(e) => {
+                    setTextSummary(e.target.value);
+                    setTemplateApplied(null);
+                  }}
                   placeholder={
                     isRtl
                       ? "اكتب هنا النقاط الرئيسية والمفاهيم التي ستشرحها خلال هذه الجلسة، والأسئلة المفتاحية التي تود توجيهها للطلاب..."

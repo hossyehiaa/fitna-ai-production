@@ -807,7 +807,7 @@ export function LiveRoom({
       // character, the log shows WHO was routed to (persistent identity).
       if (turnJson.routing?.explicitlyAddressed && turnJson.routing?.targetName) {
         addEvent(
-          isRtl ? `توجيه السؤال إلى: ${turnJson.routing.targetName}` : `Routed to: ${turnJson.routing.targetName}`,
+          isRtl ? `توجيه الكلام إلى: ${turnJson.routing.targetName}` : `Routed to: ${turnJson.routing.targetName}`,
           "system"
         );
       }
@@ -1043,6 +1043,19 @@ export function LiveRoom({
     decodedDurationMsRef.current = 0;
     estimatedStudentMsRef.current = 0;
 
+    // NETWORK WATCHDOG: if the NDJSON stream stalls (dead connection,
+    // proxy hiccup — seen on mobile networks) the reader below would hang
+    // forever and the room would stay "responding" with no feedback. Abort
+    // after 75s of total silence so the classic route fallback (or an
+    // explicit error state) always takes over. Barge-in aborts cancel it.
+    const watchdog = setTimeout(() => {
+      if (!streamDoneReceivedRef.current) {
+        try {
+          ac.abort();
+        } catch {}
+      }
+    }, 75_000);
+
     const L = latencyDebugRef.current;
     let firstAudioHandled = false;
     let currentSpeechPersonaId: string | null = null;
@@ -1254,7 +1267,7 @@ export function LiveRoom({
           routedInfo = ev.routing ?? null;
           if (ev.routing?.explicitlyAddressed && ev.routing?.targetName) {
             addEvent(
-              isRtl ? `توجيه السؤال إلى: ${ev.routing.targetName}` : `Routed to: ${ev.routing.targetName}`,
+              isRtl ? `توجيه الكلام إلى: ${ev.routing.targetName}` : `Routed to: ${ev.routing.targetName}`,
               "system"
             );
           }
@@ -1429,6 +1442,7 @@ export function LiveRoom({
         console.debug("[Latency] turn recorded", w.__fitnaLatency[w.__fitnaLatency.length - 1]);
       }
     }
+    clearTimeout(watchdog);
   }
 
   const startUtteranceRecording = useCallback(() => {
@@ -1733,7 +1747,16 @@ export function LiveRoom({
     // after the endpointing silence window). Dispatch the blob immediately
     // instead of waiting for the MediaRecorder stop/onstop round trip
     // (~100-200ms off the time-to-first-audio path).
-    const mime = activeAudioMimeTypeRef.current || (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
+    //
+    // iOS Safari EXCEPTION: Safari's MediaRecorder (audio/mp4) does NOT
+    // support timeslicing the same way — data arrives only at recorder.stop().
+    // The chunk buffer is therefore EMPTY here, and dispatching the empty
+    // "immediateBlob" silently dropped the turn (students never replied on
+    // iPhone when the browser recognizer was unavailable). For mp4 we wait
+    // for the recorder's onstop (the full, valid mp4) and dispatch THEN.
+    const activeMime = activeAudioMimeTypeRef.current || "";
+    const isMp4Recorder = activeMime.includes("mp4") || activeMime.includes("aac");
+    const mime = activeMime || (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
     const immediateBlob = new Blob(openMicChunksRef.current, { type: mime });
     openMicChunksRef.current = [];
     const hasDirect = Boolean(directTranscript && directTranscript.trim().length >= 2);
@@ -1742,11 +1765,37 @@ export function LiveRoom({
     const canFallbackToAudio = Boolean(immediateBlob && immediateBlob.size >= 400 && durationMs >= 300);
 
     recorder.onstop = null; // detached — nothing else consumes the flush
-    try {
-      recorder.stop();
-    } catch (err) {
-      console.error("Error stopping open mic recorder:", err);
+    const stopRecorder = () => {
+      try {
+        recorder.stop();
+      } catch (err) {
+        console.error("Error stopping open mic recorder:", err);
+      }
+    };
+
+    if (isMp4Recorder && !immediateBlob.size && !hasDirect) {
+      // Safari/mp4: wait for the full recording, then dispatch it.
+      recorder.onstop = () => {
+        const fullMime = activeAudioMimeTypeRef.current || "audio/mp4";
+        const fullBlob = new Blob(openMicChunksRef.current, { type: fullMime });
+        openMicChunksRef.current = [];
+        if (fullBlob.size >= 400 && durationMs >= 300) {
+          setLiveTranscriptPreview(isRtl ? "جارِ التعرف على صوتك بدقة..." : "Transcribing audio...");
+          setIsTranscriptProcessing(true);
+          void handleRecordingComplete(fullBlob, Math.max(durationMs, 600), undefined);
+        } else {
+          setLiveTranscriptPreview("");
+          setIsTranscriptProcessing(false);
+          if (isLiveOpenMicRef.current && !isTeacherMutedRef.current && speakingPersonaIdRef.current === null) {
+            startUtteranceRecording();
+          }
+        }
+      };
+      stopRecorder();
+      return;
     }
+
+    stopRecorder();
 
     if (hasDirect || canFallbackToAudio) {
       const preview = directTranscript
@@ -1762,7 +1811,7 @@ export function LiveRoom({
         startUtteranceRecording();
       }
     }
-  }, [handleRecordingComplete, isRtl, sessionId]);
+  }, [handleRecordingComplete, isRtl, sessionId, startUtteranceRecording]);
 
   const forceInstantCommit = useCallback(() => {
     if (

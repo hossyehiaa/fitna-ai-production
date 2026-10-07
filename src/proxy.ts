@@ -14,7 +14,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const TEACHER_ONLY_PREFIXES = ["/dashboard/teacher", "/session", "/history", "/growth"];
 const ADMIN_ONLY_PREFIXES = ["/dashboard/institution"];
-const PUBLIC_PREFIXES = ["/login", "/reset-password", "/auth", "/report/share", "/_next", "/api", "/manus-storage"];
+// /about + /manual are public marketing/help pages (linked from the login
+// page — a first-time visitor must be able to read the guide before login).
+const PUBLIC_PREFIXES = ["/login", "/reset-password", "/auth", "/report/share", "/about", "/manual", "/_next", "/api", "/manus-storage"];
 
 const AUTH_CTX_COOKIE = "fitna_auth_ctx";
 

@@ -121,6 +121,30 @@ function resolveVoiceProfile(
 }
 
 // ---------------------------------------------------------------------
+// TTS waterfall order — env-configurable via TTS_ORDER.
+//
+// Example: TTS_ORDER=gemini,elevenlabs,fish makes Gemini TTS the primary
+// speaking voice (most natural multilingual prosody + style instructions),
+// ElevenLabs v3 second, Fish third. Unknown/omitted tiers are appended in
+// the default order; msedge stays the always-last keyless fallback;
+// TTS_PROVIDER=msedge still forces the keyless tier only.
+// ---------------------------------------------------------------------
+export type TtsTier = "fish" | "elevenlabs" | "gemini";
+
+export function resolveTtsOrder(): TtsTier[] {
+  const raw = (process.env.TTS_ORDER || "fish,elevenlabs,gemini")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is TtsTier => s === "fish" || s === "elevenlabs" || s === "gemini");
+  const order: TtsTier[] = [];
+  for (const t of raw) if (!order.includes(t)) order.push(t);
+  for (const t of ["fish", "elevenlabs", "gemini"] as TtsTier[]) {
+    if (!order.includes(t)) order.push(t);
+  }
+  return order;
+}
+
+// ---------------------------------------------------------------------
 // Fish Audio — PRIMARY production TTS.
 //
 // The account uses the FREE flagship model `s2.1-pro-free`, selected via
@@ -275,7 +299,8 @@ export async function synthesizeStudentSpeechStreaming(
 
   const bitrate = opts?.fishMp3Bitrate ?? 64;
   const latencyMode = opts?.fishLatencyMode ?? "balanced";
-  const cacheKey = `v8:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${latencyMode}:${bitrate}:${opts?.emotion ?? "neutral"}::${normalizedText}`;
+  const tierOrder = resolveTtsOrder();
+  const cacheKey = `v9:${tierOrder.join(">")}:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${latencyMode}:${bitrate}:${opts?.emotion ?? "neutral"}::${normalizedText}`;
 
   // Repeat phrases (greetings, common interjections) — instant full cache.
   if (audioCache.has(cacheKey)) {
@@ -287,7 +312,12 @@ export async function synthesizeStudentSpeechStreaming(
   const referenceId =
     personaVoice?.fishVoiceId ?? fishVoiceFor(dialectValue, personaName ?? "", isFemaleName(personaName));
 
-  if (apiKey && referenceId) {
+  // The byte-streaming early-audio prefix is a FISH-specific optimization —
+  // it only makes sense when Fish is the FIRST tier in TTS_ORDER. When the
+  // order starts with another provider (e.g. TTS_ORDER=gemini,...), skip
+  // straight to the classic ordered waterfall so the configured primary
+  // voice actually speaks the first chunk too.
+  if (apiKey && referenceId && tierOrder[0] === "fish") {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), FISH_TIMEOUT_MS);
@@ -400,7 +430,8 @@ export async function synthesizeStudentSpeech(
   const normalizedText = prepareTextForTts(text.trim(), dialectValue);
   if (!normalizedText) return null;
 
-  const cacheKey = `v8:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${opts?.fishLatencyMode ?? "normal"}:${opts?.fishMp3Bitrate ?? 128}:${opts?.emotion ?? "neutral"}::${normalizedText}`;
+  const tierOrder = resolveTtsOrder();
+  const cacheKey = `v9:${tierOrder.join(">")}:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${opts?.fishLatencyMode ?? "normal"}:${opts?.fishMp3Bitrate ?? 128}:${opts?.emotion ?? "neutral"}::${normalizedText}`;
 
   if (audioCache.has(cacheKey)) {
     return audioCache.get(cacheKey)!;
@@ -408,49 +439,53 @@ export async function synthesizeStudentSpeech(
 
   let resultAudio: { buffer: Buffer; contentType: string } | null = null;
 
-  // MASTER PROMPT §5 — EMOTION-AWARE TTS WATERFALL:
-  //   1. Fish Audio S2        → dialect-cloned voices (product core)
-  //   2. ElevenLabs eleven_v3 → best emotional realism
-  //   3. Gemini TTS           → style-instruction synthesis
-  //   4. msedge-tts           → keyless fallback
+  // MASTER PROMPT §5 — EMOTION-AWARE TTS WATERFALL (order = TTS_ORDER env):
+  //   default: Fish Audio S2 → ElevenLabs eleven_v3 → Gemini TTS → msedge-tts
+  //   TTS_ORDER=gemini,elevenlabs,fish → Gemini first (natural prosody),
+  //   ElevenLabs second (emotional realism), Fish third (dialect clones).
   // Every layer degrades silently to the next on missing key / error /
   // timeout; TTS_PROVIDER=msedge forces the keyless tier only.
   const edgeOnly = process.env.TTS_PROVIDER === "msedge";
 
-  // 1. Priority 1: Fish Audio (free s2.1-pro-free model) — premium neural
-  //    voices with per-student reference timbres. Falls back on any
-  //    failure (402 credit, timeout, outage).
-  if (!voiceOverride && !edgeOnly && process.env.FISH_AUDIO_API_KEY) {
-    try {
-      resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice, opts?.fishLatencyMode ?? "normal", opts?.fishMp3Bitrate ?? 128);
-    } catch (e) {
-      console.warn("Fish Audio synthesis error:", e);
+  if (!edgeOnly && !voiceOverride) {
+    for (const tier of tierOrder) {
+      if (resultAudio) break;
+      try {
+        if (tier === "fish") {
+          // Premium neural voices with per-student reference timbres.
+          if (process.env.FISH_AUDIO_API_KEY) {
+            resultAudio = await synthesizeFishAudio(
+              normalizedText,
+              personaName,
+              dialectValue,
+              personaVoice,
+              opts?.fishLatencyMode ?? "normal",
+              opts?.fishMp3Bitrate ?? 128
+            );
+          }
+        } else if (tier === "elevenlabs") {
+          // eleven_v3 — emotional realism (stability 0.35, similarity 0.8;
+          // v3 audio tags carry the parsed emotion).
+          if (elevenLabsConfigured()) {
+            resultAudio = await synthesizeElevenLabs(normalizedText, opts?.emotion, personaVoice?.gender ?? null);
+          }
+        } else if (tier === "gemini") {
+          // Gemini TTS — "Say the following Arabic line in a {emotion}
+          // tone:" style instruction, PCM wrapped into WAV.
+          if (geminiTtsConfigured()) {
+            resultAudio = await synthesizeGeminiTts(normalizedText, opts?.emotion, personaVoice?.gender ?? null);
+          }
+        }
+      } catch (e) {
+        console.warn(`TTS tier "${tier}" synthesis error:`, e);
+        resultAudio = null;
+      }
     }
   }
 
-  // 2. Priority 2: ElevenLabs eleven_v3 — emotional realism (stability
-  //    0.35, similarity 0.8; v3 audio tags carry the parsed emotion).
-  if (!resultAudio && !voiceOverride && !edgeOnly && elevenLabsConfigured()) {
-    try {
-      resultAudio = await synthesizeElevenLabs(normalizedText, opts?.emotion, personaVoice?.gender ?? null);
-    } catch (e) {
-      console.warn("ElevenLabs synthesis error:", e);
-    }
-  }
-
-  // 3. Priority 3: Gemini TTS — "Say the following Arabic line in a
-  //    {emotion} tone:" style instruction, PCM wrapped into WAV.
-  if (!resultAudio && !voiceOverride && !edgeOnly && geminiTtsConfigured()) {
-    try {
-      resultAudio = await synthesizeGeminiTts(normalizedText, opts?.emotion, personaVoice?.gender ?? null);
-    } catch (e) {
-      console.warn("Gemini TTS synthesis error:", e);
-    }
-  }
-
-  // 4. Priority 4 (fallback): Microsoft Edge Neural TTS — dialect-aware
-  //    voices (ar-EG Shakir/Salma or ar-SA Hamed/Zariyah). Fast, reliable,
-  //    keyless. Sessions never break when every paid provider is down.
+  // FINAL FALLBACK: Microsoft Edge Neural TTS — dialect-aware voices
+  // (ar-EG Shakir/Salma or ar-SA Hamed/Zariyah). Fast, reliable, keyless.
+  // Sessions never break when every paid provider is down.
   if (!resultAudio) {
     try {
       const tts = new MsEdgeTTS();

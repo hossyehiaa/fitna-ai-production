@@ -14,6 +14,7 @@ import {
 import { openrouterChatStream, openrouterErrorSignature, ROLEPLAY_MODEL, ROLEPLAY_FALLBACKS, warmOpenRouter } from "@/lib/llm/openrouter";
 import { createEmotionTagFilter, parseEmotion, type Emotion } from "@/lib/llm/emotion";
 import { maybeGenerateClassroomEvent, type LiveClassroomEvent } from "@/lib/simulation/eventEngine";
+import { NON_QUESTION_INTENTS } from "@/lib/simulation/decisionEngine";
 import { buildCandidateStudentPrompt } from "@/lib/ai/personas";
 import { normalizeSpeechTranscription } from "@/lib/audio/speechNormalizer";
 import { synthesizeStudentSpeech, synthesizeStudentSpeechStreaming, type PersonaVoice } from "@/app/api/tts/route";
@@ -967,6 +968,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   targetConceptAspect: plan.qContext.targetConceptAspect,
                   teacherTitle: plan.cleanTitle,
                   isTargetStudent: true,
+                  // Greetings/praise/commands are NOT questions — the prompt
+                  // forbids fabricating an answer to a question never asked
+                  // (root cause of «أعتقد الجواب كذا» replies to «ازيك يا فهد»).
+                  utteranceIsQuestion: !NON_QUESTION_INTENTS.has(plan.intentAnalysis.intent),
                   activeMisconception: candidate.activeMisconception,
                   teacherExplanations,
                   studentContributions,

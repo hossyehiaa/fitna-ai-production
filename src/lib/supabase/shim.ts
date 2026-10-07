@@ -608,12 +608,26 @@ class QueryBuilder {
               .map((c) => `"${c}"`)
               .join(', ')
           : '*'
-      if (wantsReturning) sql += ` RETURNING ${returning}`
+      // GUARDED INSERT WITHOUT .select(): without a RETURNING clause the raw
+      // query resolves to ZERO rows even when rows WERE inserted, which made
+      // the guard below report a PHANTOM "row-level security policy"
+      // violation (seen live in production: "session_students insert failed:
+      // 42501" while the rows actually landed). RETURNING 1 makes
+      // rows.length reflect reality; the synthetic rows never reach
+      // postProcess or the caller's data.
+      if (guardSql && !wantsReturning) {
+        sql += ' RETURNING 1'
+      } else if (wantsReturning) {
+        sql += ` RETURNING ${returning}`
+      }
 
       const rows = (await db.$queryRawUnsafe(sql, ...params)) as Record<string, unknown>[]
 
       if (this.ctx && guardSql && (!Array.isArray(rows) || rows.length === 0)) {
         return { data: null, error: { message: 'new row violates row-level security policy', code: '42501' } }
+      }
+      if (!wantsReturning) {
+        return { data: null, error: null }
       }
 
       const data = postProcess(this.table, rows ?? [])

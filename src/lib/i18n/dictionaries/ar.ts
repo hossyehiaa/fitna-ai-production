@@ -31,6 +31,8 @@ export const ar: Dictionary = {
     disengaged: "خامل",
   },
   nav: {
+    about: "عن المنصة",
+    manual: "دليل الاستخدام",
     dashboard: "لوحة التحكم",
     growth: "لوحة النمو",
     history: "كل الجلسات",

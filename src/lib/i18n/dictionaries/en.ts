@@ -31,6 +31,8 @@ export const en: Dictionary = {
     disengaged: "Disengaged",
   },
   nav: {
+    about: "About",
+    manual: "User Guide",
     dashboard: "Dashboard",
     growth: "Growth Portfolio",
     history: "All Sessions",
