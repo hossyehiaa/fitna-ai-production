@@ -1,4 +1,4 @@
-import { StudentBrainState, StudentPhysicalAction, getActionDescription } from "./classroomState";
+import { StudentBrainState, getActionDescription } from "./classroomState";
 
 export interface AutonomousClassroomEvent {
   id: string;
@@ -92,5 +92,103 @@ export function checkSpontaneousClassroomEvent(params: {
     descriptionAr: "الفصل هادئ ومستقر",
     spokenPrompt: null,
     requiresTeacherIntervention: false,
+  };
+}
+
+// =====================================================================
+// LIVING CLASSROOM — random background events (master prompt §9).
+//
+// Every 30-60 seconds one event is picked at random and injected into
+// the NEXT LLM call as a system-level line, e.g.:
+//   "[EVENT: side_talk] عمر وسارة بدأوا يتكلموا مع بعض بصوت واطي."
+// The student personas must react to it in character. The scheduler is
+// per-serverless-instance in-memory (best-effort realism, zero DB cost)
+// and randomized inside the 30-60s window so the cadence never feels
+// mechanical.
+// =====================================================================
+
+export const CLASSROOM_EVENTS = [
+  "hand_raised",
+  "side_talk",
+  "off_topic_question",
+  "phone_distraction",
+  "confused_silence",
+] as const;
+
+export type ClassroomEventType = (typeof CLASSROOM_EVENTS)[number];
+
+export interface LiveClassroomEvent {
+  type: ClassroomEventType;
+  /** Human-readable narration (Arabic) — logged + persisted as metadata. */
+  descriptionAr: string;
+  /** The exact line injected into the LLM call. */
+  promptLine: string;
+}
+
+/** Per-session last-fire timestamp (ms) on this instance. */
+const sessionLastLiveEvent = new Map<string, number>();
+
+function pickTwoDistinct(names: string[]): [string, string] | null {
+  if (names.length === 0) return null;
+  if (names.length === 1) return [names[0], names[0]];
+  const first = names[Math.floor(Math.random() * names.length)];
+  let second = first;
+  while (second === first) {
+    second = names[Math.floor(Math.random() * names.length)];
+  }
+  return [first, second];
+}
+
+/**
+ * Master prompt §9 scheduler: returns a random event when ≥30-60s (random
+ * threshold) have passed since the last one for this session, and null
+ * otherwise. Callers inject `promptLine` into the next LLM call.
+ */
+export function maybeGenerateClassroomEvent(params: {
+  sessionId: string;
+  participantNames: string[];
+  turnIndex: number;
+  nowMs?: number;
+}): LiveClassroomEvent | null {
+  const { sessionId, participantNames, turnIndex } = params;
+  const now = params.nowMs ?? Date.now();
+
+  // Let the lesson get going before the classroom starts "living".
+  if (turnIndex < 2) return null;
+
+  const last = sessionLastLiveEvent.get(sessionId) ?? 0;
+  const sinceLast = now - last;
+  const thresholdMs = 30_000 + Math.floor(Math.random() * 30_000); // 30-60s
+  if (sinceLast < thresholdMs) return null;
+
+  const pair = pickTwoDistinct(participantNames);
+  if (!pair) return null;
+  const [a, b] = pair;
+
+  const type = CLASSROOM_EVENTS[Math.floor(Math.random() * CLASSROOM_EVENTS.length)];
+  let descriptionAr: string;
+  switch (type) {
+    case "hand_raised":
+      descriptionAr = `${a} رفع إيده بقوة وعايز يسأل أو يشارك إجابة`;
+      break;
+    case "side_talk":
+      descriptionAr = `${a} و${b} بدأوا يتكلموا مع بعض بصوت واطي`;
+      break;
+    case "off_topic_question":
+      descriptionAr = `${a} سرح في النص وسأل سؤال خارج عن موضوع الدرس`;
+      break;
+    case "phone_distraction":
+      descriptionAr = `${a} مشغول بتليفونه مخبّي تحت المكتب ومش مركز في الشرح`;
+      break;
+    case "confused_silence":
+      descriptionAr = `${a} باين عليه إنه اتلخبط وسكت تماماً مش عارف يجاوب`;
+      break;
+  }
+
+  sessionLastLiveEvent.set(sessionId, now);
+  return {
+    type,
+    descriptionAr,
+    promptLine: `[EVENT: ${type}] ${descriptionAr}.`,
   };
 }

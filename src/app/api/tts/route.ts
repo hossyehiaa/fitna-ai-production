@@ -10,6 +10,7 @@ import {
 } from "@/lib/ai/dialects";
 import { getCurrentUser } from "@/lib/auth/session";
 import { resolveCharacter } from "@/lib/characters/registry";
+import { synthesizeElevenLabs, synthesizeGeminiTts, elevenLabsConfigured, geminiTtsConfigured } from "@/lib/tts/providers";
 
 export const runtime = "nodejs";
 
@@ -242,6 +243,9 @@ export type SynthesisOpts = {
    *  is transparent at 64kbps MP3 and the smaller payload enqueues + ships
    *  measurably sooner on the time-to-first-audio path. */
   fishMp3Bitrate?: number;
+  /** Master prompt §3+§5 — the parsed [emotion: ...] tag, threaded into
+   *  ElevenLabs v3 audio tags and the Gemini TTS style instruction. */
+  emotion?: string;
 };
 
 /**
@@ -271,7 +275,7 @@ export async function synthesizeStudentSpeechStreaming(
 
   const bitrate = opts?.fishMp3Bitrate ?? 64;
   const latencyMode = opts?.fishLatencyMode ?? "balanced";
-  const cacheKey = `v7:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${latencyMode}:${bitrate}::${normalizedText}`;
+  const cacheKey = `v8:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${latencyMode}:${bitrate}:${opts?.emotion ?? "neutral"}::${normalizedText}`;
 
   // Repeat phrases (greetings, common interjections) — instant full cache.
   if (audioCache.has(cacheKey)) {
@@ -396,7 +400,7 @@ export async function synthesizeStudentSpeech(
   const normalizedText = prepareTextForTts(text.trim(), dialectValue);
   if (!normalizedText) return null;
 
-  const cacheKey = `v7:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${opts?.fishLatencyMode ?? "normal"}:${opts?.fishMp3Bitrate ?? 128}::${normalizedText}`;
+  const cacheKey = `v8:${personaVoice?.fishVoiceId ?? "legacy"}:${dialectValue}::${profile.voice}::${profile.pitch}::${profile.rate}::${opts?.fishLatencyMode ?? "normal"}:${opts?.fishMp3Bitrate ?? 128}:${opts?.emotion ?? "neutral"}::${normalizedText}`;
 
   if (audioCache.has(cacheKey)) {
     return audioCache.get(cacheKey)!;
@@ -404,10 +408,19 @@ export async function synthesizeStudentSpeech(
 
   let resultAudio: { buffer: Buffer; contentType: string } | null = null;
 
+  // MASTER PROMPT §5 — EMOTION-AWARE TTS WATERFALL:
+  //   1. Fish Audio S2        → dialect-cloned voices (product core)
+  //   2. ElevenLabs eleven_v3 → best emotional realism
+  //   3. Gemini TTS           → style-instruction synthesis
+  //   4. msedge-tts           → keyless fallback
+  // Every layer degrades silently to the next on missing key / error /
+  // timeout; TTS_PROVIDER=msedge forces the keyless tier only.
+  const edgeOnly = process.env.TTS_PROVIDER === "msedge";
+
   // 1. Priority 1: Fish Audio (free s2.1-pro-free model) — premium neural
   //    voices with per-student reference timbres. Falls back on any
   //    failure (402 credit, timeout, outage).
-  if (!voiceOverride && process.env.FISH_AUDIO_API_KEY) {
+  if (!voiceOverride && !edgeOnly && process.env.FISH_AUDIO_API_KEY) {
     try {
       resultAudio = await synthesizeFishAudio(normalizedText, personaName, dialectValue, personaVoice, opts?.fishLatencyMode ?? "normal", opts?.fishMp3Bitrate ?? 128);
     } catch (e) {
@@ -415,9 +428,29 @@ export async function synthesizeStudentSpeech(
     }
   }
 
-  // 2. Priority 2 (fallback): Microsoft Edge Neural TTS — dialect-aware
+  // 2. Priority 2: ElevenLabs eleven_v3 — emotional realism (stability
+  //    0.35, similarity 0.8; v3 audio tags carry the parsed emotion).
+  if (!resultAudio && !voiceOverride && !edgeOnly && elevenLabsConfigured()) {
+    try {
+      resultAudio = await synthesizeElevenLabs(normalizedText, opts?.emotion, personaVoice?.gender ?? null);
+    } catch (e) {
+      console.warn("ElevenLabs synthesis error:", e);
+    }
+  }
+
+  // 3. Priority 3: Gemini TTS — "Say the following Arabic line in a
+  //    {emotion} tone:" style instruction, PCM wrapped into WAV.
+  if (!resultAudio && !voiceOverride && !edgeOnly && geminiTtsConfigured()) {
+    try {
+      resultAudio = await synthesizeGeminiTts(normalizedText, opts?.emotion, personaVoice?.gender ?? null);
+    } catch (e) {
+      console.warn("Gemini TTS synthesis error:", e);
+    }
+  }
+
+  // 4. Priority 4 (fallback): Microsoft Edge Neural TTS — dialect-aware
   //    voices (ar-EG Shakir/Salma or ar-SA Hamed/Zariyah). Fast, reliable,
-  //    keyless. Sessions never break when Fish Audio is unavailable.
+  //    keyless. Sessions never break when every paid provider is down.
   if (!resultAudio) {
     try {
       const tts = new MsEdgeTTS();
@@ -510,13 +543,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
     }
 
-    const { text, personaName, voiceOverride, dialect, personaId, avatarKey } = (await request.json()) as {
+    const { text, personaName, voiceOverride, dialect, personaId, avatarKey, emotion } = (await request.json()) as {
       text?: string;
       personaName?: string;
       voiceOverride?: string;
       dialect?: string;
       personaId?: string;
       avatarKey?: string;
+      emotion?: string;
     };
 
     if (!text || !text.trim()) {
@@ -533,7 +567,9 @@ export async function POST(request: NextRequest) {
       personaVoice = await resolvePersonaVoice(personaId, avatarKey, personaName, dialect);
     }
 
-    const resultAudio = await synthesizeStudentSpeech(text, personaName, voiceOverride, dialect, personaVoice);
+    const resultAudio = await synthesizeStudentSpeech(text, personaName, voiceOverride, dialect, personaVoice, {
+      emotion,
+    });
 
     if (!resultAudio) {
       return NextResponse.json({ error: "Failed to synthesize audio" }, { status: 500 });

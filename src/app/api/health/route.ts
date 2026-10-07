@@ -1,6 +1,17 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { groq, preloadGroqModels, discoveredModelIds, groqErrorSignature } from '@/lib/ai/groq'
+import {
+  openrouterChat,
+  pingOpenRouter,
+  openrouterErrorSignature,
+  ROLEPLAY_MODEL,
+  ROLEPLAY_FALLBACKS,
+  REPORT_MODEL,
+  CLASSIFIER_MODEL,
+  resolveChain,
+} from '@/lib/llm/openrouter'
+import { elevenLabsConfigured, geminiTtsConfigured } from '@/lib/tts/providers'
+import { toneAnalysisConfigured } from '@/lib/analysis/tone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -9,28 +20,12 @@ export const dynamic = 'force-dynamic'
 // Health check — deployment verification endpoint.
 // Reports service availability FLAGS ONLY (no secrets, no config values).
 //
-// ?probe=1 — LIVE provider probes (public info only): the Groq model
-// lineup visible to this key plus a one-token chat call per candidate
-// model. Built to diagnose "LLM falls back to deterministic replies"
-// outages (decommissioned models / revoked access) straight from the
-// production URL, without dashboard access.
+// ?probe=1 — LIVE provider probes: a one-token OpenRouter call per Dream
+// Team model (the exact failure each would hit on the real turn path),
+// so "LLM falls back to deterministic replies" outages (geo-blocked
+// models / revoked access / bad key) are diagnosable straight from the
+// production URL without dashboard access.
 // =====================================================================
-
-// Candidate chat models probed individually (fast-fail on dead ids).
-const PROBE_CANDIDATES = [
-  'openai/gpt-oss-120b',
-  'openai/gpt-oss-20b',
-  'moonshotai/kimi-k2-instruct',
-  'meta-llama/llama-4-maverick-17b-128e-instruct',
-  'meta-llama/llama-4-scout-17b-16e-instruct',
-  'qwen/qwen3-235b-a22b-tput-8k',
-  'qwen/qwen3.8-27b',
-  'qwen/qwen3-32b',
-  'deepseek-r1-distill-llama-70b',
-  'llama-3.3-70b-versatile',
-  'allam-2-7b',
-  'llama-3.1-8b-instant',
-]
 
 export async function GET(request: Request) {
   let dbOk = false
@@ -41,19 +36,26 @@ export async function GET(request: Request) {
     dbOk = false
   }
 
+  // TTS waterfall status (master prompt §5 order).
+  const ttsTiers: string[] = []
+  if (process.env.FISH_AUDIO_API_KEY) ttsTiers.push('fish-audio')
+  if (elevenLabsConfigured()) ttsTiers.push('elevenlabs:eleven_v3')
+  if (geminiTtsConfigured()) ttsTiers.push('gemini-tts')
+  ttsTiers.push('msedge') // keyless — always available
+
   const payload: Record<string, unknown> = {
     status: dbOk ? 'ok' : 'degraded',
     service: 'fitna-ai',
     db: dbOk ? 'up' : 'down',
     // Provider flags (public information — never the keys themselves).
-    // Format kept backwards-compatible with the e2e contract ("groq-...").
-    ai: process.env.GROQ_API_KEY
-      ? `groq-${(process.env.GROQ_CHAT_MODEL || 'gpt-oss-120b').split('/').pop()}`
+    ai: process.env.OPENROUTER_API_KEY
+      ? `openrouter:${ROLEPLAY_MODEL.split('/').pop()}+${ROLEPLAY_FALLBACKS.length}fallbacks`
       : 'deterministic-fallback',
-    tts: process.env.FISH_AUDIO_API_KEY
-      ? `fish-audio:${process.env.FISH_AUDIO_MODEL || 's2.1-pro-free'}+msedge`
-      : 'msedge',
+    llmReport: process.env.OPENROUTER_API_KEY ? `openrouter:${REPORT_MODEL.split('/').pop()}` : 'unavailable',
+    llmClassifier: process.env.OPENROUTER_API_KEY ? `openrouter:${CLASSIFIER_MODEL.split('/').pop()}` : 'unavailable',
     stt: process.env.GROQ_API_KEY ? 'groq-whisper-large-v3-turbo' : 'unavailable',
+    tts: ttsTiers.join('→'),
+    toneAnalysis: toneAnalysisConfigured() ? 'gemini-2.5-pro' : 'not-configured',
     auth: 'custom-scrypt-session',
     timestamp: new Date().toISOString(),
   }
@@ -61,85 +63,31 @@ export async function GET(request: Request) {
   if (new URL(request.url).searchParams.get('probe') === '1') {
     const probe: Record<string, unknown> = {}
 
-    // 1) Model lineup visible to this key (drives chain resolution).
-    try {
-      const list = await groq.models.list()
-      const ids = ((list as unknown as { data?: Array<{ id?: string }> }).data ?? [])
-        .map((m) => m.id)
-        .filter((id): id is string => typeof id === 'string')
-      probe.modelsCount = ids.length
-      probe.models = ids
-    } catch (err) {
-      probe.modelsError = groqErrorSignature(err)
-    }
+    // 1) Live one-token ping through the classifier chain (fast liveness).
+    probe.ping = await pingOpenRouter()
 
-    // 2) One-token chat call per candidate — the exact failure each model
-    //    would hit on the real turn path (status + short message).
+    // 2) Per-model probe of the FULL Dream Team + any env pins — the exact
+    //    failure each model would hit on the real turn path.
     const chatProbes: Record<string, unknown> = {}
-    await Promise.all(
-      PROBE_CANDIDATES.map(async (m) => {
-        try {
-          const c = (await groq.chat.completions.create({
-            model: m,
-            messages: [{ role: 'user', content: 'قل: تمام' }],
-            max_completion_tokens: 8,
-            ...(m.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' as const } : {}),
-          })) as { choices?: Array<{ message?: { content?: string } }> }
-          chatProbes[m] = {
-            ok: true,
-            sample: (c.choices?.[0]?.message?.content ?? '').replace(/\s+/g, ' ').slice(0, 40),
-          }
-        } catch (err) {
-          chatProbes[m] = { ok: false, err: groqErrorSignature(err) }
-        }
-      })
-    )
-    probe.chatProbes = chatProbes
-
-    // 3) What the resilient chain actually resolved to right now.
-    await preloadGroqModels()
-    probe.discoveredCache = discoveredModelIds()
-
-    // 4) TURN-SHAPE matrix — the exact parameter combinations the real
-    //    turn route sends (whichever of these fails is the turn-killer).
-    const turnShape = async (
-      label: string,
-      model: string,
-      params: Record<string, unknown>
-    ): Promise<void> => {
+    const probeModels = resolveChain(ROLEPLAY_MODEL, ROLEPLAY_FALLBACKS)
+    for (const model of [...new Set([...probeModels, REPORT_MODEL, CLASSIFIER_MODEL])]) {
       try {
-        const c = (await groq.chat.completions.create({
+        const r = await openrouterChat({
           model,
           messages: [{ role: 'user', content: 'قل: تمام' }],
-          max_completion_tokens: 30,
-          ...params,
-        } as Parameters<typeof groq.chat.completions.create>[0])) as {
-          choices?: Array<{ message?: { content?: string } }>
-        }
-        ;(probe.turnShapes as Record<string, unknown>)[label] = {
-          ok: true,
-          sample: (c.choices?.[0]?.message?.content ?? '').replace(/\s+/g, ' ').slice(0, 40),
-        }
+          maxTokens: 10,
+          temperature: 0,
+          timeoutMs: 20_000,
+        })
+        chatProbes[model] = { ok: true, sample: r.text.replace(/\s+/g, ' ').slice(0, 40), servedBy: r.model }
       } catch (err) {
-        ;(probe.turnShapes as Record<string, unknown>)[label] = { ok: false, err: groqErrorSignature(err) }
+        chatProbes[model] = { ok: false, err: openrouterErrorSignature(err) }
       }
     }
-    probe.turnShapes = {}
-    for (const model of ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'allam-2-7b']) {
-      const short = model.split('/').pop() || model
-      await turnShape(`${short}+temp065`, model, { temperature: 0.65 })
-      await turnShape(`${short}+json`, model, { response_format: { type: 'json_object' } })
-      await turnShape(`${short}+temp+json`, model, { temperature: 0.65, response_format: { type: 'json_object' } })
-      await turnShape(
-        `${short}+full-turn`,
-        model,
-        {
-          temperature: 0.65,
-          response_format: { type: 'json_object' },
-          ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' as const } : {}),
-        }
-      )
-    }
+    probe.chatProbes = chatProbes
+
+    // 3) The exact chain order the turn path will walk right now.
+    probe.roleplayChain = probeModels
 
     payload.probe = probe
   }

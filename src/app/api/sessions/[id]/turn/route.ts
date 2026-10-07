@@ -6,6 +6,7 @@ import { normalizeSpeechTranscription } from "@/lib/audio/speechNormalizer";
 import { synthesizeStudentSpeech, type PersonaVoice } from "@/app/api/tts/route";
 import { parseDialect } from "@/lib/ai/dialects";
 import { resolveTargetCharacter, explicitTargetFromUtterance } from "@/lib/ai/speakerRouting";
+import { maybeGenerateClassroomEvent } from "@/lib/simulation/eventEngine";
 
 export const runtime = "nodejs";
 
@@ -324,6 +325,14 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
     return "statement" as const;
   });
 
+  // Master prompt §9 — living classroom: a random background event fires
+  // every 30-60s and is injected into this turn's LLM calls (personas
+  // react in character) + persisted as turn metadata.
+  const liveEvent = maybeGenerateClassroomEvent({ sessionId, participantNames, turnIndex });
+  if (liveEvent) {
+    console.log(`[Turn:${sessionId.slice(0, 8)}] live-event ${liveEvent.type}: ${liveEvent.descriptionAr}`);
+  }
+
   const studentReactionsPromise = (personas && personas.length > 0)
     ? generateStudentReactions({
         personas,
@@ -350,6 +359,7 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
         teacherFullName,
         dialect: sessionDialect,
         participantNames,
+        liveEventPrompt: liveEvent?.promptLine ?? null,
       }).catch((err) => {
         console.error("generateStudentReactions failed, using safe fallback:", err);
         return generateFallbackReactions({
@@ -401,7 +411,8 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
         speakingStudent.name,
         undefined,
         speakingPersona?.dialect ?? sessionDialect,
-        personaVoice
+        personaVoice,
+        { emotion: speakingStudent.emotion } // §5 — emotion-aware synthesis
       ).catch((err) => {
         console.warn("Pre-synthesis TTS error:", err);
         return null;
@@ -450,6 +461,7 @@ async function handleTurn(request: NextRequest, params: Promise<{ id: string }>)
         teacher_title: activeStudentTitle,
         full_teacher_title: lockedTeacherTitle || activeStudentTitle,
         duration_ms: teacherSpeechDurationMs,
+        live_event: liveEvent ? { type: liveEvent.type, description: liveEvent.descriptionAr } : null,
       },
       occurred_at_ms: effectiveTeacherMs,
     },

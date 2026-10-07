@@ -48,3 +48,7 @@ next-env.d.ts
 
 # Local helper artifacts (never commit)
 /.zscripts/
+
+# Local DB + logs (never commit)
+/pgdata/
+*.log

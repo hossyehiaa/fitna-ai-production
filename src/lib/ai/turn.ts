@@ -1,4 +1,5 @@
-import { groq, CHAT_MODEL, callGroqWithFallback } from "@/lib/ai/groq";
+import { openrouterChat, CLASSIFIER_MODEL, CLASSIFIER_FALLBACKS, ROLEPLAY_MODEL, ROLEPLAY_FALLBACKS } from "@/lib/llm/openrouter";
+import { parseEmotion, type Emotion } from "@/lib/llm/emotion";
 import { buildClassroomSwarmSystemPrompt, buildQuestionClassifierPrompt, buildCandidateStudentPrompt } from "@/lib/ai/personas";
 import type { Database } from "@/lib/supabase/types";
 import { StudentBrainState, StudentPhysicalAction, initializeStudentBrain, getActionDescription } from "@/lib/simulation/classroomState";
@@ -73,16 +74,23 @@ export async function classifyTeacherUtterance(text: string): Promise<QuestionTy
     .trim();
 
   try {
-    const completion = await callGroqWithFallback({
-      model: "allam-2-7b",
+    // Master prompt §7 — Claude Haiku 4.5 via OpenRouter (chain-walk
+    // protected; the regex heuristics above/below stay as the
+    // zero-latency error fallback). The app's "statement" bucket absorbs
+    // §7's "rhetorical" class (a question that expects no knowledge answer).
+    const completion = await openrouterChat({
+      model: CLASSIFIER_MODEL,
+      fallbacks: CLASSIFIER_FALLBACKS,
       messages: [{ role: "user", content: buildQuestionClassifierPrompt(textWithoutPraise || text) }],
-      max_completion_tokens: 10,
+      maxTokens: 12,
+      temperature: 0,
     });
-    const raw = (completion.choices[0]?.message?.content ?? "").trim().toLowerCase();
+    const raw = (completion.text ?? "").trim().toLowerCase();
     if (raw.includes("open")) return "open";
     if (raw.includes("closed")) return "closed";
+    if (raw.includes("rhetorical") || raw.includes("statement")) return "statement";
   } catch (err) {
-    console.warn("Classify question with allam-2-7b error:", err);
+    console.warn("Classify question with OpenRouter (claude-haiku-4.5) error:", err);
   }
   if (/[؟?]/.test(text) || /\b(what|why|how|which)\b/i.test(text)) {
     return isReasoningOrSocratic ? "open" : "closed";
@@ -799,6 +807,8 @@ export async function generateStudentReactions(params: {
   dialect?: string;
   /** Actual classroom participant names — drives name-based routing. */
   participantNames?: string[];
+  /** Master prompt §9 — living-classroom event line injected into this turn's LLM calls. */
+  liveEventPrompt?: string | null;
 }): Promise<StudentTurnResult[]> {
   const {
     personas,
@@ -817,10 +827,10 @@ export async function generateStudentReactions(params: {
 
   // Single-Speaker Pipeline (Spec: Turn manager selects 0 or 1 speaker; only active candidate calls LLM, other 3 students silent in code)
 
-  async function generateSpeechForCandidate(candidate: (typeof decision.candidateSpeakers)[0]): Promise<string | null> {
+  async function generateSpeechForCandidate(candidate: (typeof decision.candidateSpeakers)[0]): Promise<{ text: string; emotion: Emotion } | null> {
     // 1. Direct, instant, natural responses for classroom conversational rituals (Zero hallucination):
     const fast = ritualFastReply(intentAnalysis, teacherUtterance, dialect, cleanTitle);
-    if (fast) return fast;
+    if (fast) return { text: fast, emotion: "neutral" as Emotion };
 
     const studentBrain = studentBrains.find((s) => s.personaId === candidate.personaId);
     const persona = personas.find((p) => p.id === candidate.personaId);
@@ -847,25 +857,33 @@ export async function generateStudentReactions(params: {
       classmates: saudiClassmates,
     });
 
-    const userPrompt = `${studentPrompt}\n\nرد بصيغة JSON فقط بهذا الشكل تماماً:\n{\n  "text": "كلام الطالب المنطوق هنا فقط"\n}`;
+    const userPrompt =
+      `${studentPrompt}\n\nرد بصيغة JSON فقط بهذا الشكل تماماً:\n{\n  "text": "كلام الطالب المنطوق هنا فقط — ابدأ قيمة text بوسم المشاعر [emotion: ...] ثم الكلام بعده"\n}` +
+      (params.liveEventPrompt
+        ? `\n${params.liveEventPrompt}\nتفاعل مع هذا الحدث داخل شخصيتك بشكل طبيعي (لو يخصك أو تلاحظه في الفصل) دون أن تترك الإجابة عن كلام المعلم.`
+        : "");
 
     try {
-      const completion = await callGroqWithFallback({
-        model: CHAT_MODEL,
+      // Master prompt §4 — Claude Sonnet 4.5 via OpenRouter, Gemini 2.5
+      // pro/flash as fallback chain; the emotion tag (§3) is parsed and
+      // stripped here so neither the UI nor TTS ever sees/spells it.
+      const completion = await openrouterChat({
+        model: ROLEPLAY_MODEL,
+        fallbacks: ROLEPLAY_FALLBACKS,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        temperature: 0.65,
-        max_completion_tokens: 250,
-        response_format: { type: "json_object" },
+        temperature: 0.85,
+        maxTokens: 150, // §4: short replies = realism + speed
       });
 
-      const raw = completion.choices[0]?.message?.content ?? "{}";
+      const raw = completion.text ?? "{}";
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
       if (typeof parsed.text === "string" && parsed.text.trim().length > 0) {
-        return parsed.text.trim();
+        const { emotion, clean } = parseEmotion(parsed.text.trim());
+        if (clean.length > 0) return { text: clean, emotion };
       }
     } catch (err) {
       console.error(`Failed to generate speech for candidate student ${candidate.name}:`, err);
@@ -875,21 +893,21 @@ export async function generateStudentReactions(params: {
 
   // Generate speech ONLY for candidate speaker(s) (never for silenced students)
   const candidateMap = new Map(decision.candidateSpeakers.map((c) => [c.personaId, c]));
-  const spokenResults = new Map<string, string | null>();
+  const spokenResults = new Map<string, { text: string; emotion: Emotion } | null>();
 
   if (decision.candidateSpeakers.length === 1) {
     const single = decision.candidateSpeakers[0];
-    const text = await generateSpeechForCandidate(single);
-    spokenResults.set(single.personaId, text);
+    const spoken = await generateSpeechForCandidate(single);
+    spokenResults.set(single.personaId, spoken);
   } else if (decision.candidateSpeakers.length > 1) {
     const entries = await Promise.all(
       decision.candidateSpeakers.map(async (c) => {
-        const text = await generateSpeechForCandidate(c);
-        return [c.personaId, text] as const;
+        const spoken = await generateSpeechForCandidate(c);
+        return [c.personaId, spoken] as const;
       })
     );
-    for (const [id, text] of entries) {
-      spokenResults.set(id, text);
+    for (const [id, spoken] of entries) {
+      spokenResults.set(id, spoken);
     }
   }
 
@@ -919,7 +937,8 @@ export async function generateStudentReactions(params: {
       };
     }
 
-    const rawText = spokenResults.get(p.id) || null;
+    const spoken = spokenResults.get(p.id) || null;
+    const rawText = spoken?.text ?? null;
 
     const isNumeratorDenominatorQuestion = /(?:فوق|تحت|بسط|مقام|اسمه\s*(?:ايه|إيه))/i.test(
       currentQuestionText
@@ -1112,7 +1131,10 @@ export async function generateStudentReactions(params: {
       attentionDelta: updated?.attentionDelta ?? 5,
       physicalAction: action,
       actionDescriptionAr: desc,
-      emotion: candidate.spokenEmotion,
+      // §3: the LLM's parsed emotion tag (English allowed set), falling
+      // back to the plan's spokenEmotion when the deterministic ritual
+      // path (no tag) served the reply.
+      emotion: spoken?.emotion ?? candidate.spokenEmotion,
     };
   });
 }

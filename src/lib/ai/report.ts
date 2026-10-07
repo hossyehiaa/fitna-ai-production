@@ -1,4 +1,5 @@
-import { callGroqWithFallback, CHAT_MODEL } from "@/lib/ai/groq";
+import { openrouterChat, REPORT_MODEL, REPORT_FALLBACKS } from "@/lib/llm/openrouter";
+import { analyzeTeacherToneAcross, type TeacherToneAnalysis } from "@/lib/analysis/tone";
 import type { Database } from "@/lib/supabase/types";
 import { cleanPedagogicalText } from "@/lib/utils/pedagogy";
 
@@ -68,6 +69,20 @@ export async function generateSessionReport(params: {
     })
     .join("\n");
 
+  // Master prompt §8 — teacher tone analysis (Gemini 2.5 Pro, audio input)
+  // on the newest teacher clips that carry audio; merged into the Opus
+  // report input below. Absent key/audio ⇒ null ⇒ section omitted.
+  const teacherAudioClips = sortedEvents
+    .filter((e) => e.event_type === "teacher_utterance" && typeof e.audio_url === "string" && e.audio_url.length > 64)
+    .slice(-2)
+    .map((e) => ({
+      audioBase64: (e.audio_url as string).replace(/^data:([^;]+);base64,/, ""),
+      mimeType: (/^data:([^;]+);/.exec(e.audio_url as string)?.[1]) || "audio/webm",
+    }));
+  const toneAnalysis: TeacherToneAnalysis | null = teacherAudioClips.length
+    ? await analyzeTeacherToneAcross(teacherAudioClips).catch(() => null)
+    : null;
+
   if (!transcriptLines) {
     return {
       summaryAr: "الجلسة دي انتهت من غير أي حوار مسجّل بين المعلم والطلاب.",
@@ -82,7 +97,7 @@ export async function generateSessionReport(params: {
 
   const prompt = `انت خبير تدريب معلمين ومقيم تربوي معتمد بتحلل أداء معلم في محاكاة فصل دراسي مصري وفقًا لأطر التقييم التربوي العالمية (Danielson Framework & CLASS Framework). اقرا النص الكامل للجلسة اللي حصلت فعليًا وحلله.
 
-${lessonContext ? `محتوى الدرس: "${lessonContext.slice(0, 500)}"\n` : ""}
+${lessonContext ? `محتوى الدرس: "${lessonContext.slice(0, 500)}"\n` : ""}${toneAnalysis ? `تحليل نبرة صوت المعلم (من المقاطع الصوتية الفعلية للجلسة — Gemini 2.5 Pro):\n- الثقة: ${toneAnalysis.confidence}%\n- السرعة: ${toneAnalysis.speed}%\n- الحماس: ${toneAnalysis.enthusiasm}%\n- التوتر: ${toneAnalysis.stress}%\n- الدفء: ${toneAnalysis.warmth}%${toneAnalysis.notesAr ? `\n- ملاحظة: ${toneAnalysis.notesAr}` : ""}\nادمج هذا التحليل في تحليل نبرة المعلم وثقته في التقرير.\n` : ""}
 الأرقام المحسوبة فعليًا من الجلسة دي:
 - الدرجة الكلية: ${metrics.overallScore}/100
 - نسبة حديث المعلم (TTT): ${metrics.teacherTalkRatio}% (المعيار المستهدف: 20-35%، وأقصى حد مقبول 50%)
@@ -155,14 +170,18 @@ ${transcriptLines}
 
   let raw = "{}";
   try {
-    const completion = await callGroqWithFallback({
-      model: CHAT_MODEL,
+    // Master prompt §6 — Claude Opus 4.5 via OpenRouter (Sonnet 4.5 +
+    // Gemini 2.5 Pro as chain fallbacks). Async report endpoint callers
+    // (sessions/[id]/end + report/regenerate) tolerate the latency.
+    const completion = await openrouterChat({
+      model: REPORT_MODEL,
+      fallbacks: REPORT_FALLBACKS,
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.7,
-      max_completion_tokens: 3500,
-      response_format: { type: "json_object" },
+      maxTokens: 3000,
+      temperature: 0.5,
+      timeoutMs: 90_000, // long-form JSON — generous per-attempt budget
     });
-    raw = completion.choices[0]?.message?.content ?? "{}";
+    raw = completion.text || "{}";
   } catch (llmErr) {
     console.error("All LLM providers failed for session report, constructing robust analytical report:", llmErr);
   }

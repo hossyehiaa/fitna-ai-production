@@ -11,7 +11,9 @@ import {
   type TurnPlanParams,
   type QuestionType,
 } from "@/lib/ai/turn";
-import { callGroqStreamWithFallback, preloadGroqModels, groqErrorSignature } from "@/lib/ai/groq";
+import { openrouterChatStream, openrouterErrorSignature, ROLEPLAY_MODEL, ROLEPLAY_FALLBACKS, warmOpenRouter } from "@/lib/llm/openrouter";
+import { createEmotionTagFilter, parseEmotion, type Emotion } from "@/lib/llm/emotion";
+import { maybeGenerateClassroomEvent, type LiveClassroomEvent } from "@/lib/simulation/eventEngine";
 import { buildCandidateStudentPrompt } from "@/lib/ai/personas";
 import { normalizeSpeechTranscription } from "@/lib/audio/speechNormalizer";
 import { synthesizeStudentSpeech, synthesizeStudentSpeechStreaming, type PersonaVoice } from "@/app/api/tts/route";
@@ -214,18 +216,20 @@ function stateLabel(state: string) {
   return "منتبه";
 }
 
-/** Warm outbound TLS pools (Fish + Groq) so the first real call skips handshakes.
- * Also primes the Groq model-discovery cache so chain resolution (which
- * auto-migrates across model deprecations) costs nothing on the first turn. */
+/** Warm outbound TLS pools (Fish + Groq + OpenRouter + ElevenLabs + Gemini)
+ * so the first real call skips handshakes. */
 function warmUpstreamConnections() {
   const warm = (url: string) => {
     fetch(url, { method: "HEAD", signal: AbortSignal.timeout(3000) }).catch(() => {});
   };
   if (process.env.FISH_AUDIO_API_KEY) warm("https://api.fish.audio/");
-  if (process.env.GROQ_API_KEY) {
-    warm("https://api.groq.com/");
-    void preloadGroqModels();
+  if (process.env.GROQ_API_KEY) warm("https://api.groq.com/"); // Whisper STT upstream
+  if (process.env.OPENROUTER_API_KEY) {
+    warm("https://openrouter.ai/");
+    void warmOpenRouter();
   }
+  if (process.env.ELEVENLABS_API_KEY) warm("https://api.elevenlabs.io/");
+  if (process.env.GEMINI_API_KEY) warm("https://generativelanguage.googleapis.com/");
 }
 
 // GET — warmup ping. The live room fires this on mount so the function,
@@ -711,6 +715,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                 duration_ms: teacherSpeechDurationMs,
                 latency: L,
                 streaming: true,
+                live_event: liveEvent ? { type: liveEvent.type, description: liveEvent.descriptionAr } : null,
               },
               occurred_at_ms: effectiveTeacherMs,
             },
@@ -817,7 +822,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           text: string,
           candidate: { personaId: string; name: string },
           personaVoice: PersonaVoice | undefined,
-          dialectForVoice: string
+          dialectForVoice: string,
+          emotion?: string
         ): Promise<boolean> => {
           // LATENCY: chunk 0 streams — Fish returns raw MP3 frames as they
           // are synthesized (measured first-bytes ≈ 430-480ms vs 700-2400ms
@@ -837,7 +843,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                 anySent = true;
                 markFirstAudio();
               },
-              { fishLatencyMode: "balanced", fishMp3Bitrate: 64 }
+              { fishLatencyMode: "balanced", fishMp3Bitrate: 64, emotion }
             );
             if (result.buffer && result.buffer.length > 0) {
               sendAudioChunk(result.buffer, result.contentType, candidate);
@@ -849,6 +855,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           const audio = await synthesizeStudentSpeech(text, candidate.name, undefined, dialectForVoice, personaVoice, {
             fishLatencyMode: "normal",
             fishMp3Bitrate: 128,
+            emotion,
           });
           if (!audio || audio.buffer.length === 0) return false;
           sendAudioChunk(audio.buffer, audio.contentType, candidate);
@@ -871,6 +878,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         });
 
         let classroomSilence = false;
+        // Master prompt §9 — living classroom: a random background event
+        // fires every 30-60s and is injected into this turn's LLM calls.
+        let liveEvent: LiveClassroomEvent | null = null;
         if (plan.isSilent) {
           // SILENCE IS A VALID ACTION — cards update, no audio, explicit
           // client-side "students listened" feedback (no silent failure).
@@ -887,6 +897,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
             if (!persistencePromise) persistencePromise = persistTurn();
             await persistencePromise;
           } else {
+            // §9 — schedule the living-classroom event BEFORE the speakers
+            // loop so every candidate's prompt sees it (personas react in
+            // character) and the persisted turn records it.
+            liveEvent = maybeGenerateClassroomEvent({
+              sessionId,
+              participantNames,
+              turnIndex,
+            });
+            if (liveEvent) {
+              console.log(
+                `[TurnStream:${sessionId.slice(0, 8)}] live-event ${liveEvent.type}: ${liveEvent.descriptionAr}`
+              );
+              L.liveEvent = liveEvent.type;
+            }
             for (const candidate of speakers) {
               const persona = personas.find((p) => p.id === candidate.personaId);
               if (!persona) continue;
@@ -905,6 +929,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
               let anyAudioSent = false;
               const pendingTts: Promise<unknown>[] = [];
               ttsFirstChunkStart = Date.now();
+              // §3 — the streamed emotion tag, captured the moment the
+              // filter decodes it (BEFORE the first TTS chunk fires).
+              let streamedEmotion: Emotion = "neutral";
 
               // The chunker/extractor pair is RECREATABLE: when the LLM
               // chain restarts on another model mid-stream (walk + reset),
@@ -912,7 +939,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
               // — no duplicated text in the new attempt's pipeline.
               let chunker = createSentenceChunker((chunkText) => {
                 pendingTts.push(
-                  synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice).then((ok) => {
+                  synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice, streamedEmotion).then((ok) => {
                     if (ok) anyAudioSent = true;
                   })
                 );
@@ -948,8 +975,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   classmates: plan.saudiClassmates,
                 });
                 const userPrompt =
-                  `${studentPrompt}\n\nرد بصيغة JSON فقط بهذا الشكل تماماً:\n{\n  "text": "كلام الطالب المنطوق هنا فقط"\n}` +
-                  `\nمهم للسرعة: ابدأ نص "text" بجملة قصيرة جداً (كلمة إلى ثلاث كلمات مثل «أيوه يا مستر!» أو «صراحة مش متأكد») ثم أكمل باقي الرد.`;
+                  `${studentPrompt}\n\nرد بصيغة JSON فقط بهذا الشكل تماماً:\n{\n  "text": "كلام الطالب المنطوق هنا فقط — ابدأ قيمة text بوسم المشاعر [emotion: ...] ثم الكلام بعده"\n}` +
+                  `\nمهم للسرعة: ابدأ نص "text" بجملة قصيرة جداً (كلمة إلى ثلاث كلمات مثل «أيوه يا مستر!» أو «صراحة مش متأكد») ثم أكمل باقي الرد.` +
+                  (liveEvent
+                    ? `\n${liveEvent.promptLine}\nتفاعل مع هذا الحدث داخل شخصيتك بشكل طبيعي (لو يخصك أو تلاحظه في الفصل) دون أن تترك الإجابة عن كلام المعلم.`
+                    : "");
 
                 let extractor = createJsonTextFieldExtractor("text");
                 const tLlmOpen = Date.now();
@@ -959,16 +989,36 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                 // attempt that later died — kept so the final speech text
                 // matches what the class actually heard.
                 let salvagedFromFailedAttempts = "";
+                // §3 — streaming-safe emotion tag filter: the [emotion: ...]
+                // prefix may split across SSE deltas, so it is buffered
+                // (≤48 chars) until decidable, the parsed emotion is surfaced
+                // BEFORE any text reaches the chunker/TTS, and the spoken
+                // stream never contains the tag itself.
+                const forwardCleanText = (freshClean: string) => {
+                  chunker.push(freshClean);
+                  if (!sawFirstChunk) {
+                    sawFirstChunk = true;
+                    L.firstSentenceMs = Date.now() - tLlmOpen;
+                  }
+                };
+                let emotionFilter = createEmotionTagFilter(forwardCleanText, (e) => {
+                  streamedEmotion = e;
+                });
                 try {
-                  const result = await callGroqStreamWithFallback(
+                  // Master prompt §4 — Claude Sonnet 4.5 via OpenRouter with
+                  // the Gemini 2.5 pro/flash fallback chain (two resilience
+                  // layers: OpenRouter native `models` routing + the local
+                  // walk in openrouterChatStream).
+                  const result = await openrouterChatStream(
                     {
+                      model: ROLEPLAY_MODEL,
+                      fallbacks: ROLEPLAY_FALLBACKS,
                       messages: [
                         { role: "system", content: plan.systemPrompt },
                         { role: "user", content: userPrompt },
                       ],
-                      temperature: 0.65,
-                      max_completion_tokens: 250,
-                      response_format: { type: "json_object" },
+                      temperature: 0.85,
+                      maxTokens: 150, // §4: short replies = realism + speed
                     },
                     (delta) => {
                       if (!sawFirstToken) {
@@ -977,11 +1027,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                       }
                       const fresh = extractor.push(delta);
                       if (fresh) {
-                        chunker.push(fresh);
-                        if (!sawFirstChunk) {
-                          sawFirstChunk = true;
-                          L.firstSentenceMs = Date.now() - tLlmOpen;
-                        }
+                        emotionFilter.push(fresh);
                       }
                     },
                     {
@@ -993,9 +1039,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                       onAttemptReset: () => {
                         salvagedFromFailedAttempts = extractor.text.trim() || salvagedFromFailedAttempts;
                         extractor = createJsonTextFieldExtractor("text");
+                        emotionFilter = createEmotionTagFilter(forwardCleanText, (e) => {
+                          streamedEmotion = e;
+                        });
                         chunker = createSentenceChunker((chunkText) => {
                           pendingTts.push(
-                            synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice).then((ok) => {
+                            synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice, streamedEmotion).then((ok) => {
                               if (ok) anyAudioSent = true;
                             })
                           );
@@ -1006,6 +1055,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   L.model = result.model;
                   if (result.attempts && result.attempts.length > 0) L.llmWalk = result.attempts;
                   if (result.restarts) L.llmRestarts = result.restarts;
+                  emotionFilter.flush();
                   chunker.flush();
                   await Promise.all(pendingTts);
 
@@ -1023,6 +1073,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                   if (abortSignal.aborted) {
                     // barge-in: stop generating; keep whatever text/audio
                     // already went out.
+                    emotionFilter.flush();
                     chunker.flush();
                     try {
                       await Promise.all(pendingTts);
@@ -1030,7 +1081,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     fullRawText = extractor.text.trim() || null;
                   } else {
                     console.warn("Streaming LLM failed, engaging deterministic fallback:", llmErr);
-                    L.llmError = groqErrorSignature(llmErr); // dev-mode latency block
+                    L.llmError = openrouterErrorSignature(llmErr); // dev-mode latency block
+                    emotionFilter.flush();
                     chunker.flush();
                     try {
                       await Promise.all(pendingTts);
@@ -1054,7 +1106,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     const fallbackPending: Promise<unknown>[] = [];
                     const fallbackChunker = createSentenceChunker((chunkText) => {
                       fallbackPending.push(
-                        synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice).then((ok) => {
+                        synthesizeAndSendChunk(chunkText, candidate, personaVoice, dialectForVoice, streamedEmotion).then((ok) => {
                           if (ok) anyAudioSent = true;
                         })
                       );
@@ -1064,6 +1116,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     await Promise.all(fallbackPending);
                   }
                 }
+              }
+
+              // §3 — strip the emotion tag from the ASSEMBLED text (the
+              // spoken stream was already filtered live above; this covers
+              // the persisted/returned text and keeps the tag out of the UI).
+              if (fullRawText) {
+                const assembledParsed = parseEmotion(fullRawText);
+                if (assembledParsed.emotion !== "neutral") streamedEmotion = assembledParsed.emotion;
+                if (assembledParsed.clean) fullRawText = assembledParsed.clean;
               }
 
               const sanitized = fullRawText
@@ -1084,9 +1145,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                     `${candidate.name}: منتبه`,
                   delta:
                     plan.decision.updatedStudents.find((s) => s.personaId === candidate.personaId)?.attentionDelta ?? 5,
-                  emotion: candidate.spokenEmotion,
+                  emotion: streamedEmotion,
                 });
-                send({ type: "speech", personaId: candidate.personaId, name: candidate.name, fullText: finalText });
+                send({ type: "speech", personaId: candidate.personaId, name: candidate.name, fullText: finalText, emotion: streamedEmotion });
               } else if (!anyAudioSent && !finalText && !abortSignal.aborted) {
                 // NO SILENT TURN: every teacher utterance gets a response,
                 // a retry state, or an explicit error.

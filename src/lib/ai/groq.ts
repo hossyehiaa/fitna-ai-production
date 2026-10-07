@@ -21,8 +21,22 @@ import Groq from "groq-sdk";
 // their deterministic fallback quickly.
 // =====================================================================
 
+// MISSING-KEY RESILIENCE: the Groq SDK constructor THROWS when apiKey is
+// undefined/empty, which crashed module evaluation of every importer
+// (groq.ts → stt.ts → turn/stream route) in environments without
+// GROQ_API_KEY (e.g. local sandboxes / preview deployments). Construct
+// with a placeholder instead: the module stays loadable, health reports
+// stt: 'unavailable', and any REAL Whisper call fails fast with a clear
+// 401 that callers already surface explicitly (never silently).
+const GROQ_KEY = process.env.GROQ_API_KEY;
+if (!GROQ_KEY) {
+  console.warn(
+    "[groq] GROQ_API_KEY not set — Whisper STT unavailable; constructing inert client so module evaluation stays safe."
+  );
+}
+
 export const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: GROQ_KEY || "unset-local-placeholder",
   // Optional endpoint override (ops/proxy/testing — e.g. GROQ_API_BASE for
   // routing through a reachable region). Undefined => default api.groq.com.
   ...(process.env.GROQ_API_BASE ? { baseURL: process.env.GROQ_API_BASE } : {}),
