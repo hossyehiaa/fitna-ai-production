@@ -54,7 +54,11 @@ export interface ChatOpts {
 // Model registry — the master-prompt Dream Team with env-pin override.
 // ---------------------------------------------------------------------
 export const ROLEPLAY_MODEL = process.env.OPENROUTER_ROLEPLAY_MODEL || "anthropic/claude-sonnet-4.5";
-export const ROLEPLAY_FALLBACKS: string[] = ["google/gemini-2.5-pro", "google/gemini-2.5-flash"];
+// FLASH before PRO: when the primary is unavailable (e.g. a low-credit 402),
+// gemini-2.5-flash answers in ~1-3s while gemini-2.5-pro's thinking budget
+// measured 8-13s to first token — an 18s time-to-first-audio felt exactly
+// like "students don't reply". Pro stays as the last resort.
+export const ROLEPLAY_FALLBACKS: string[] = ["google/gemini-2.5-flash", "google/gemini-2.5-pro"];
 export const REPORT_MODEL = process.env.OPENROUTER_REPORT_MODEL || "anthropic/claude-opus-4.5";
 export const REPORT_FALLBACKS: string[] = ["anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro"];
 export const CLASSIFIER_MODEL = process.env.OPENROUTER_CLASSIFIER_MODEL || "anthropic/claude-haiku-4.5";
