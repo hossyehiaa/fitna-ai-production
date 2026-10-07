@@ -20,11 +20,18 @@ import urllib.request
 import urllib.error
 
 VC_TOKEN = os.environ["VERCEL_TOKEN"]
-TEAM = os.environ.get("VERCEL_TEAM", "team_P1h8bqOKaEuVERbYgVVmhMTK")
+# Personal scope unless VERCEL_TEAM is explicitly provided (old team id is DEAD).
+TEAM = os.environ.get("VERCEL_TEAM", "").strip()
 PROJECT = os.environ.get("VERCEL_PROJECT", "fitna-ai-production")
 ROOT = "/home/z/my-project"
 
 API = "https://api.vercel.com"
+
+
+def tq(prefix="?"):
+    """teamId query fragment — empty when deploying to personal scope."""
+    return f"{prefix}teamId={TEAM}" if TEAM else ""
+
 
 def call(method, path, body=None, headers=None, raw=False, expect=(200, 201)):
     url = f"{API}{path}"
@@ -90,9 +97,9 @@ def sha1_of(path):
 # ---------------------------------------------------------------------
 # 1. Create / verify project
 # ---------------------------------------------------------------------
-s, proj = call("GET", f"/v9/projects/{PROJECT}?teamId={TEAM}")
+s, proj = call("GET", f"/v9/projects/{PROJECT}{tq()}")
 if s == 404:
-    s, proj = call("POST", f"/v9/projects?teamId={TEAM}", {
+    s, proj = call("POST", f"/v9/projects{tq()}", {
         "name": PROJECT,
         "framework": "nextjs",
     })
@@ -123,19 +130,19 @@ if os.environ.get("FISH_AUDIO_API_KEY"):
                      "target": ["production"], "type": "encrypted"})
 
 # Upsert: create missing keys, update changed plain values.
-s, existing = call("GET", f"/v9/projects/{PROJECT_ID}/env?teamId={TEAM}&target=production")
+s, existing = call("GET", f"/v9/projects/{PROJECT_ID}/env{tq()}{'&' if TEAM else '?'}target=production")
 existing_map = {e["key"]: e for e in existing.get("envs", [])} if s == 200 else {}
 
 for ev in env_vars:
     cur = existing_map.get(ev["key"])
     if cur is None:
-        s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env?teamId={TEAM}", ev)
+        s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env{tq()}", ev)
         print(f"  env {ev['key']}: {'✓ created' if s in (200, 201) else '✗ ' + str(res)[:120]}")
     elif ev["type"] == "plain" and cur.get("value") == ev["value"]:
         print(f"  env {ev['key']}: unchanged")
     else:
         # POSTing to the env-id endpoint overwrites the stored value.
-        s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env/{cur['id']}?teamId={TEAM}", ev)
+        s, res = call("POST", f"/v10/projects/{PROJECT_ID}/env/{cur['id']}{tq()}", ev)
         print(f"  env {ev['key']}: {'✓ updated' if s in (200, 201) else '✗ ' + str(res)[:120]}")
 
 # ---------------------------------------------------------------------
@@ -149,9 +156,9 @@ for rel, full in files.items():
     digests[sha] = rel  # deployment references: sha -> path
     with open(full, "rb") as f:
         content = f.read()
-    s, res = call("POST", f"/v2/files?teamId={TEAM}", content, headers={
+    s, res = call("POST", f"/v2/files{tq()}", content, headers={
         "Content-Type": "application/octet-stream",
-        "x-now-file-digest": sha,
+        "x-vercel-digest": sha,  # live-verified header (x-now-file-digest is dead)
     }, raw=True)
     if s not in (200, 201):
         print(f"✗ upload failed {rel}: {s} {res[:200] if isinstance(res,bytes) else res}")
@@ -161,7 +168,14 @@ print("✓ all files uploaded")
 # ---------------------------------------------------------------------
 # 4. Create production deployment
 # ---------------------------------------------------------------------
-s, dep = call("POST", f"/v13/deployments?teamId={TEAM}&skipAutoDetectionConfirmation=1", {
+# Git metadata for traceability on the Vercel dashboard (source of truth = GitHub main).
+import subprocess
+commit_sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"],
+                            capture_output=True, text=True).stdout.strip()
+commit_msg = subprocess.run(["git", "-C", ROOT, "log", "-1", "--pretty=%B"],
+                             capture_output=True, text=True).stdout.strip().splitlines()[0]
+
+s, dep = call("POST", f"/v13/deployments{tq()}{'&' if TEAM else '?'}skipAutoDetectionConfirmation=1", {
     "name": PROJECT,
     "files": digests,
     "projectSettings": {
@@ -171,6 +185,11 @@ s, dep = call("POST", f"/v13/deployments?teamId={TEAM}&skipAutoDetectionConfirma
         "outputDirectory": ".next",
     },
     "target": "production",
+    "meta": {
+        "githubCommitSha": commit_sha,
+        "githubCommitMessage": commit_msg,
+        "githubCommitRef": "main",
+    },
 })
 if s not in (200, 201):
     print("DEPLOYMENT CREATE FAILED:", s, json.dumps(dep, ensure_ascii=False)[:600])
@@ -184,7 +203,7 @@ print(f"✓ deployment created: {DEP_ID}")
 deadline = time.time() + 600
 last = None
 while time.time() < deadline:
-    s, d = call("GET", f"/v13/deployments/{DEP_ID}?teamId={TEAM}")
+    s, d = call("GET", f"/v13/deployments/{DEP_ID}{tq()}")
     state = d.get("readyState") or d.get("state")
     if state != last:
         print(f"  state: {state}")
@@ -194,7 +213,7 @@ while time.time() < deadline:
     if state == "ERROR" or state == "CANCELED":
         # fetch build logs hint
         print("DEPLOYMENT FAILED — fetching events:")
-        s, evs = call("GET", f"/v3/deployments/{DEP_ID}/events?teamId={TEAM}&limit=50")
+        s, evs = call("GET", f"/v3/deployments/{DEP_ID}/events{tq()}{'&' if TEAM else '?'}limit=50")
         if s == 200:
             for e in (evs if isinstance(evs, list) else evs.get("events", []))[-25:]:
                 payload = e.get("payload", {})
